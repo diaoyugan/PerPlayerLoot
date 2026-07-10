@@ -1,0 +1,32 @@
+name: PerPlayerLoot
+version: '${version}'
+description: Every player gets their own loot from naturally generated structures.
+author: 钓鱼竿呀(diaoyugan)
+prefix: PerPlayerLoot
+main: top.diaoyugan.perPlayerLoot.PerPlayerLoot
+bootstrapper: top.diaoyugan.perPlayerLoot.PerPlayerLootBootstrap
+loader: top.diaoyugan.perPlayerLoot.PerPlayerLootLoader
+api-version: '1.21.11'
+load: POSTWORLD
+dependencies:
+  server:
+    ProtocolLib:
+      load: BEFORE
+      required: false
+commands:
+  perplayerloot:
+    description: Reload PerPlayerLoot configuration and language files.
+    usage: /<command> reload
+    aliases:
+      - ppl
+    permission: perplayerloot.reload
+permissions:
+  perplayerloot.reload:
+    description: Allows reloading PerPlayerLoot configuration.
+    default: op
+  perplayerloot.destroy.containers:
+    description: Allows destroying natural loot containers when config protection is enabled.
+    default: op
+  perplayerloot.destroy.frames:
+    description: Allows destroying natural loot item frames when config protection is enabled.
+    default: op

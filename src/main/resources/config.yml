@@ -1,0 +1,15 @@
+config-version: 1
+
+allow-destroy-natural-loot-containers: false
+allow-destroy-natural-loot-frames: false
+protect-natural-loot-containers-from-hoppers: true
+
+database:
+  password: ""
+
+personal-drop-timeout-seconds: 300
+personal-drop-timeout-action: RECOVER
+
+# Non player-placed item frames containing these items are treated as per-player loot frames.
+loot-frame-materials:
+  - ELYTRA

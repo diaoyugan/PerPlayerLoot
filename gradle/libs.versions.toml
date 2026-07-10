@@ -1,0 +1,13 @@
+[versions]
+paper-api = "1.21.11-R0.1-SNAPSHOT"
+minecraft = "1.21.11"
+protocollib = "5.4.0"
+
+run-task = "3.0.2"
+
+[libraries]
+paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper-api" }
+protocollib = { module = "net.dmulloy2:ProtocolLib", version.ref = "protocollib" }
+
+[plugins]
+run-paper = { id = "xyz.jpenilla.run-paper", version.ref = "run-task" }

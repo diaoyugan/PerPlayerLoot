@@ -1,0 +1,12 @@
+package top.diaoyugan.perPlayerLoot;
+
+import io.papermc.paper.plugin.bootstrap.BootstrapContext;
+import io.papermc.paper.plugin.bootstrap.PluginBootstrap;
+
+public class PerPlayerLootBootstrap implements PluginBootstrap {
+
+    @Override
+    public void bootstrap(final BootstrapContext context) {
+        // Plugin bootstrap logic
+    }
+}
