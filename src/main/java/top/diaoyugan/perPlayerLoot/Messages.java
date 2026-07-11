@@ -21,6 +21,7 @@ import org.bukkit.entity.Player;
 final class Messages {
 
     static final String FRAME_ALREADY_CLAIMED = "message.perplayerloot.frame_already_claimed";
+    static final String FRAME_ALREADY_CLAIMED_CANNOT_PLACE = "message.perplayerloot.frame_already_claimed_cannot_place";
     static final String PERSONAL_DROPS_DISABLED = "message.perplayerloot.personal_drops_disabled";
     static final String NO_CONTAINER_DESTROY_PERMISSION = "message.perplayerloot.no_container_destroy_permission";
     static final String NO_FRAME_DESTROY_PERMISSION = "message.perplayerloot.no_frame_destroy_permission";
@@ -40,6 +41,8 @@ final class Messages {
         if (!languageFolder.exists() && !languageFolder.mkdirs()) {
             plugin.getLogger().warning("Could not create language folder.");
         }
+        loadBundledLanguage(plugin, "en_us");
+        loadBundledLanguage(plugin, "zh_cn");
         releaseDefaultLanguage(plugin, languageFolder, "en_us");
         releaseDefaultLanguage(plugin, languageFolder, "zh_cn");
 
@@ -97,9 +100,25 @@ final class Messages {
         try (InputStream inputStream = new FileInputStream(file);
              InputStreamReader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8)) {
             Map<String, String> entries = new Gson().fromJson(reader, LANG_TYPE);
-            LANGUAGES.put(locale, entries == null ? Map.of() : entries);
+            LANGUAGES.computeIfAbsent(locale, ignored -> new HashMap<>()).putAll(entries == null ? Map.of() : entries);
         } catch (IOException exception) {
             plugin.getLogger().warning("Could not load language file: " + file.getName());
+        }
+    }
+
+    private static void loadBundledLanguage(final PerPlayerLoot plugin, final String locale) {
+        String resourcePath = "assets/perplayerloot/lang/" + locale + ".json";
+        try (InputStream inputStream = plugin.getResource(resourcePath)) {
+            if (inputStream == null) {
+                plugin.getLogger().warning("Missing bundled language file: " + resourcePath);
+                return;
+            }
+            try (InputStreamReader reader = new InputStreamReader(inputStream, StandardCharsets.UTF_8)) {
+                Map<String, String> entries = new Gson().fromJson(reader, LANG_TYPE);
+                LANGUAGES.put(locale, entries == null ? new HashMap<>() : new HashMap<>(entries));
+            }
+        } catch (IOException exception) {
+            plugin.getLogger().warning("Could not load bundled language file: " + locale + ".json");
         }
     }
 

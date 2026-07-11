@@ -140,6 +140,22 @@ final class LootListener implements Listener {
         );
     }
 
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onClaimedFrameInteract(final PlayerInteractEntityEvent event) {
+        if (!(event.getRightClicked() instanceof ItemFrame itemFrame) || !isNaturalLootFrame(itemFrame)) {
+            return;
+        }
+        if (!this.personalDropManager.hasClaimedOrActiveDrop(event.getPlayer(), itemFrame)) {
+            return;
+        }
+
+        event.setCancelled(true);
+        ItemStack handItem = event.getPlayer().getInventory().getItem(event.getHand());
+        if (handItem != null && !handItem.getType().isAir()) {
+            Messages.send(event.getPlayer(), Messages.FRAME_ALREADY_CLAIMED_CANNOT_PLACE);
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPlayerInteractEntity(final PlayerInteractEntityEvent event) {
         if (!(event.getRightClicked() instanceof ItemFrame itemFrame)) {

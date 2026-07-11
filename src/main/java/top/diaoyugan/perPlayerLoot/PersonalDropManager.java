@@ -82,6 +82,12 @@ final class PersonalDropManager implements Listener {
         return true;
     }
 
+    boolean hasClaimedOrActiveDrop(final Player player, final ItemFrame itemFrame) {
+        UUID sourceId = itemFrame.getUniqueId();
+        UUID playerId = player.getUniqueId();
+        return this.storage.hasClaimedFrame(sourceId, playerId) || hasActiveDrop(playerId, sourceId);
+    }
+
     void restoreOnlinePlayerDrops() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             restoreDrops(player);

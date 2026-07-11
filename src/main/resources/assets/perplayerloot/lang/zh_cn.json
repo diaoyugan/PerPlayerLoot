@@ -1,5 +1,6 @@
 {
   "message.perplayerloot.frame_already_claimed": "你已经领取过这个战利品了。",
+  "message.perplayerloot.frame_already_claimed_cannot_place": "你不能在已领取的战利品展示框中放置物品。",
   "message.perplayerloot.personal_drops_disabled": "未安装 ProtocolLib，个人展示框掉落物功能已禁用。",
   "message.perplayerloot.no_container_destroy_permission": "你没有权限破坏这个战利品容器。",
   "message.perplayerloot.no_frame_destroy_permission": "你没有权限破坏这个战利品展示框。",

@@ -1,5 +1,6 @@
 {
   "message.perplayerloot.frame_already_claimed": "You already claimed this loot.",
+  "message.perplayerloot.frame_already_claimed_cannot_place": "You cannot place items in this claimed loot frame.",
   "message.perplayerloot.personal_drops_disabled": "Personal item-frame drops are disabled because ProtocolLib is not installed.",
   "message.perplayerloot.no_container_destroy_permission": "You do not have permission to destroy this loot container.",
   "message.perplayerloot.no_frame_destroy_permission": "You do not have permission to destroy this loot item frame.",
