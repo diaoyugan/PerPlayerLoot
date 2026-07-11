@@ -1,4 +1,4 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.listener;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -48,8 +48,12 @@ import org.bukkit.loot.Lootable;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import net.kyori.adventure.text.Component;
+import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
+import top.diaoyugan.perPlayerLoot.message.Messages;
+import top.diaoyugan.perPlayerLoot.personal.PersonalDropManager;
+import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 
-final class LootListener implements Listener {
+public final class LootListener implements Listener {
 
     private static final byte TRUE = 1;
 
@@ -62,7 +66,7 @@ final class LootListener implements Listener {
     private final PersonalDropManager personalDropManager;
     private final Map<String, Integer> openContainerCounts = new HashMap<>();
 
-    LootListener(
+    public LootListener(
         final PerPlayerLoot plugin,
         final LootStorage storage,
         final NamespacedKey playerPlacedFrameKey,
@@ -133,6 +137,7 @@ final class LootListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onHangingPlace(final HangingPlaceEvent event) {
+        // Player-placed frames must never be treated as natural loot frames.
         event.getEntity().getPersistentDataContainer().set(
             this.playerPlacedFrameKey,
             PersistentDataType.BYTE,
@@ -149,6 +154,8 @@ final class LootListener implements Listener {
             return;
         }
 
+        // The client sees claimed frames as empty, but the server still has the real item.
+        // Cancel here so right-clicking cannot rotate it or place a player item into it.
         event.setCancelled(true);
         ItemStack handItem = event.getPlayer().getInventory().getItem(event.getHand());
         if (handItem != null && !handItem.getType().isAir()) {
@@ -170,6 +177,7 @@ final class LootListener implements Listener {
             return;
         }
 
+        // Mark frames when a player inserts an item into an existing empty frame.
         itemFrame.getPersistentDataContainer().set(
             this.playerPlacedFrameKey,
             PersistentDataType.BYTE,
@@ -239,6 +247,7 @@ final class LootListener implements Listener {
             return;
         }
 
+        // Stop hoppers before they receive the inventory; moving items can consume vanilla loot tables.
         if (isManagedNaturalLootContainer(event.getSearchBlock().getState())) {
             event.setInventory(null);
         }
@@ -249,7 +258,8 @@ final class LootListener implements Listener {
         tagLootContainers(event.getChunk());
     }
 
-    void tagLoadedLootContainers() {
+    public void tagLoadedLootContainers() {
+        // POSTWORLD startup can see chunks that loaded before this listener was registered.
         for (World world : Bukkit.getWorlds()) {
             for (Chunk chunk : world.getLoadedChunks()) {
                 tagLootContainers(chunk);
@@ -427,6 +437,7 @@ final class LootListener implements Listener {
             return;
         }
 
+        // Persist enough information to keep protecting the block after vanilla clears its loot table.
         dataContainer.set(this.lootContainerTableKey, PersistentDataType.STRING, lootTableKey);
         if (state instanceof Lootable) {
             dataContainer.set(this.lootContainerSeedKey, PersistentDataType.LONG, seed);
@@ -507,3 +518,4 @@ final class LootListener implements Listener {
         };
     }
 }
+

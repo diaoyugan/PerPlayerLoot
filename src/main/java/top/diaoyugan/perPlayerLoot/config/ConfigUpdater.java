@@ -1,4 +1,4 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.config;
 
 import java.io.File;
 import java.io.IOException;
@@ -8,13 +8,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.logging.Level;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
+import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
 
-final class ConfigUpdater {
+public final class ConfigUpdater {
 
     private ConfigUpdater() {
     }
 
-    static void update(final PerPlayerLoot plugin) {
+    public static void update(final PerPlayerLoot plugin) {
         File configFile = new File(plugin.getDataFolder(), "config.yml");
         if (!configFile.exists()) {
             plugin.saveResource("config.yml", false);
@@ -71,3 +72,4 @@ final class ConfigUpdater {
         }
     }
 }
+

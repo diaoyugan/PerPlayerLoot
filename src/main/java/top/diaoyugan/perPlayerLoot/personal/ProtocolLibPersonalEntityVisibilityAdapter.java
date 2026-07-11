@@ -1,4 +1,4 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.personal;
 
 import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolLibrary;
@@ -24,6 +24,8 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
+import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
+import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 
 final class ProtocolLibPersonalEntityVisibilityAdapter implements PersonalEntityVisibilityAdapter {
 
@@ -179,6 +181,7 @@ final class ProtocolLibPersonalEntityVisibilityAdapter implements PersonalEntity
         }
         int itemMetadataIndex = itemIndex.getAsInt();
 
+        // Claimed players should see the frame as empty while the server keeps the original item.
         List<WrappedDataValue> values;
         try {
             values = event.getPacket().getDataValueCollectionModifier().read(0);
@@ -237,3 +240,4 @@ final class ProtocolLibPersonalEntityVisibilityAdapter implements PersonalEntity
         return OptionalInt.empty();
     }
 }
+

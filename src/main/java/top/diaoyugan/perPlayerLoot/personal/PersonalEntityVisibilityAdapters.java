@@ -1,14 +1,16 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.personal;
 
 import java.util.logging.Level;
 import org.bukkit.Bukkit;
+import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
+import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 
-final class PersonalEntityVisibilityAdapters {
+public final class PersonalEntityVisibilityAdapters {
 
     private PersonalEntityVisibilityAdapters() {
     }
 
-    static PersonalEntityVisibilityAdapter create(final PerPlayerLoot plugin, final LootStorage storage) {
+    public static PersonalEntityVisibilityAdapter create(final PerPlayerLoot plugin, final LootStorage storage) {
         if (!Bukkit.getPluginManager().isPluginEnabled("ProtocolLib")) {
             plugin.getLogger().warning("ProtocolLib is not installed or not enabled. Personal item-frame drops are disabled.");
             return null;
@@ -22,3 +24,4 @@ final class PersonalEntityVisibilityAdapters {
         }
     }
 }
+

@@ -3,6 +3,14 @@ package top.diaoyugan.perPlayerLoot;
 import java.util.List;
 import org.bukkit.NamespacedKey;
 import org.bukkit.plugin.java.JavaPlugin;
+import top.diaoyugan.perPlayerLoot.command.PerPlayerLootCommand;
+import top.diaoyugan.perPlayerLoot.config.ConfigUpdater;
+import top.diaoyugan.perPlayerLoot.listener.LootListener;
+import top.diaoyugan.perPlayerLoot.message.Messages;
+import top.diaoyugan.perPlayerLoot.personal.PersonalDropManager;
+import top.diaoyugan.perPlayerLoot.personal.PersonalEntityVisibilityAdapter;
+import top.diaoyugan.perPlayerLoot.personal.PersonalEntityVisibilityAdapters;
+import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 
 public final class PerPlayerLoot extends JavaPlugin {
 
@@ -57,7 +65,7 @@ public final class PerPlayerLoot extends JavaPlugin {
         }
     }
 
-    void reloadPluginConfiguration() {
+    public void reloadPluginConfiguration() {
         ConfigUpdater.update(this);
         reloadConfig();
         Messages.load(this);

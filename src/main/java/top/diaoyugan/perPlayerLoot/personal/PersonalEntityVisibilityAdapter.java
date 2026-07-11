@@ -1,11 +1,11 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.personal;
 
 import java.util.UUID;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.Player;
 
-interface PersonalEntityVisibilityAdapter extends AutoCloseable {
+public interface PersonalEntityVisibilityAdapter extends AutoCloseable {
 
     void hideEntityFromOtherPlayers(Entity entity, Player owner);
 
@@ -20,3 +20,4 @@ interface PersonalEntityVisibilityAdapter extends AutoCloseable {
     @Override
     void close();
 }
+

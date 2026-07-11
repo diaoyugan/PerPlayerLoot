@@ -1,4 +1,4 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.listener;
 
 import java.util.UUID;
 import org.bukkit.Location;
@@ -39,3 +39,4 @@ final class PerPlayerLootInventoryHolder implements InventoryHolder {
         throw new UnsupportedOperationException("Virtual holder does not own a fixed inventory.");
     }
 }
+

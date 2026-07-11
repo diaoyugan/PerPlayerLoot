@@ -1,4 +1,4 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.personal;
 
 import java.util.HashMap;
 import java.util.List;
@@ -22,15 +22,18 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Vector;
+import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
+import top.diaoyugan.perPlayerLoot.message.Messages;
+import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 
-final class PersonalDropManager implements Listener {
+public final class PersonalDropManager implements Listener {
 
     private final PerPlayerLoot plugin;
     private final LootStorage storage;
     private final PersonalEntityVisibilityAdapter visibilityAdapter;
     private final Map<UUID, PersonalDrop> activeDrops = new HashMap<>();
 
-    PersonalDropManager(
+    public PersonalDropManager(
         final PerPlayerLoot plugin,
         final LootStorage storage,
         final PersonalEntityVisibilityAdapter visibilityAdapter
@@ -42,11 +45,11 @@ final class PersonalDropManager implements Listener {
         startTimeoutTask();
     }
 
-    boolean isEnabled() {
+    public boolean isEnabled() {
         return this.visibilityAdapter != null;
     }
 
-    boolean createDrop(final Player player, final ItemFrame itemFrame) {
+    public boolean createDrop(final Player player, final ItemFrame itemFrame) {
         if (!isEnabled()) {
             Messages.send(player, Messages.PERSONAL_DROPS_DISABLED);
             return false;
@@ -82,13 +85,13 @@ final class PersonalDropManager implements Listener {
         return true;
     }
 
-    boolean hasClaimedOrActiveDrop(final Player player, final ItemFrame itemFrame) {
+    public boolean hasClaimedOrActiveDrop(final Player player, final ItemFrame itemFrame) {
         UUID sourceId = itemFrame.getUniqueId();
         UUID playerId = player.getUniqueId();
         return this.storage.hasClaimedFrame(sourceId, playerId) || hasActiveDrop(playerId, sourceId);
     }
 
-    void restoreOnlinePlayerDrops() {
+    public void restoreOnlinePlayerDrops() {
         for (Player player : Bukkit.getOnlinePlayers()) {
             restoreDrops(player);
             if (this.visibilityAdapter != null) {
@@ -97,7 +100,7 @@ final class PersonalDropManager implements Listener {
         }
     }
 
-    void recoverAllActiveDrops() {
+    public void recoverAllActiveDrops() {
         for (PersonalDrop drop : List.copyOf(this.activeDrops.values())) {
             recoverDrop(drop, true);
         }
@@ -299,3 +302,4 @@ final class PersonalDropManager implements Listener {
         return new Vector(face.getModX(), face.getModY(), face.getModZ());
     }
 }
+

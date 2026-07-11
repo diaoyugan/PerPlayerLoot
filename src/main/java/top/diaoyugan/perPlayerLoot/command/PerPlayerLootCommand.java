@@ -1,4 +1,4 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.command;
 
 import io.papermc.paper.command.brigadier.BasicCommand;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
@@ -7,12 +7,14 @@ import java.util.List;
 import org.bukkit.command.CommandSender;
 import org.jetbrains.annotations.NotNull;
 import org.jspecify.annotations.NonNull;
+import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
+import top.diaoyugan.perPlayerLoot.message.Messages;
 
-final class PerPlayerLootCommand implements BasicCommand {
+public final class PerPlayerLootCommand implements BasicCommand {
 
     private final PerPlayerLoot plugin;
 
-    PerPlayerLootCommand(final PerPlayerLoot plugin) {
+    public PerPlayerLootCommand(final PerPlayerLoot plugin) {
         this.plugin = plugin;
     }
 
@@ -41,3 +43,4 @@ final class PerPlayerLootCommand implements BasicCommand {
         return "perplayerloot.reload";
     }
 }
+

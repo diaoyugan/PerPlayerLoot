@@ -1,4 +1,4 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.storage;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -22,19 +22,22 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.io.BukkitObjectInputStream;
+import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
+import top.diaoyugan.perPlayerLoot.personal.PersonalDrop;
+import top.diaoyugan.perPlayerLoot.personal.PersonalDropState;
 
-final class LootStorage {
+public final class LootStorage {
 
     private final PerPlayerLoot plugin;
     private final File databaseFile;
     private Connection connection;
 
-    LootStorage(final PerPlayerLoot plugin) {
+    public LootStorage(final PerPlayerLoot plugin) {
         this.plugin = plugin;
         this.databaseFile = new File(plugin.getDataFolder(), "loot-data.sqlite");
     }
 
-    void load() {
+    public void load() {
         if (!this.plugin.getDataFolder().exists() && !this.plugin.getDataFolder().mkdirs()) {
             this.plugin.getLogger().warning("Could not create plugin data folder.");
         }
@@ -53,7 +56,7 @@ final class LootStorage {
         }
     }
 
-    void save() {
+    public void save() {
         if (this.connection == null) {
             return;
         }
@@ -67,7 +70,7 @@ final class LootStorage {
         }
     }
 
-    boolean hasContainerInventory(final String containerKey, final UUID playerId) {
+    public boolean hasContainerInventory(final String containerKey, final UUID playerId) {
         String sql = "SELECT 1 FROM container_inventories WHERE container_key = ? AND player_uuid = ?";
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, containerKey);
@@ -80,7 +83,7 @@ final class LootStorage {
         }
     }
 
-    ItemStack[] getContainerInventory(final String containerKey, final UUID playerId, final int size) {
+    public ItemStack[] getContainerInventory(final String containerKey, final UUID playerId, final int size) {
         String sql = "SELECT contents FROM container_inventories WHERE container_key = ? AND player_uuid = ?";
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, containerKey);
@@ -100,7 +103,7 @@ final class LootStorage {
         }
     }
 
-    void setContainerInventory(final String containerKey, final UUID playerId, final ItemStack[] contents) {
+    public void setContainerInventory(final String containerKey, final UUID playerId, final ItemStack[] contents) {
         String sql = """
             INSERT INTO container_inventories(container_key, player_uuid, contents)
             VALUES(?, ?, ?)
@@ -116,7 +119,7 @@ final class LootStorage {
         }
     }
 
-    boolean hasContainerData(final String containerKey) {
+    public boolean hasContainerData(final String containerKey) {
         String sql = "SELECT 1 FROM container_inventories WHERE container_key = ? LIMIT 1";
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, containerKey);
@@ -128,7 +131,7 @@ final class LootStorage {
         }
     }
 
-    void removeContainerData(final String containerKey) {
+    public void removeContainerData(final String containerKey) {
         try (PreparedStatement statement = connection().prepareStatement("DELETE FROM container_inventories WHERE container_key = ?")) {
             statement.setString(1, containerKey);
             statement.executeUpdate();
@@ -137,7 +140,7 @@ final class LootStorage {
         }
     }
 
-    boolean hasClaimedFrame(final UUID frameId, final UUID playerId) {
+    public boolean hasClaimedFrame(final UUID frameId, final UUID playerId) {
         String sql = "SELECT 1 FROM frame_claims WHERE frame_uuid = ? AND player_uuid = ?";
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, frameId.toString());
@@ -150,7 +153,7 @@ final class LootStorage {
         }
     }
 
-    void setClaimedFrame(final UUID frameId, final UUID playerId) {
+    public void setClaimedFrame(final UUID frameId, final UUID playerId) {
         String sql = "INSERT OR IGNORE INTO frame_claims(frame_uuid, player_uuid) VALUES(?, ?)";
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, frameId.toString());
@@ -161,7 +164,7 @@ final class LootStorage {
         }
     }
 
-    void savePersonalDrop(final PersonalDrop drop) {
+    public void savePersonalDrop(final PersonalDrop drop) {
         String sql = """
             INSERT INTO personal_drops(
                 entity_uuid, owner_uuid, source_uuid, item, world_uuid, x, y, z, yaw, pitch, created, state
@@ -200,7 +203,7 @@ final class LootStorage {
         }
     }
 
-    void setPersonalDropState(final UUID dropId, final PersonalDropState state) {
+    public void setPersonalDropState(final UUID dropId, final PersonalDropState state) {
         String sql = "UPDATE personal_drops SET state = ? WHERE entity_uuid = ?";
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, state.name());
@@ -211,7 +214,7 @@ final class LootStorage {
         }
     }
 
-    void removePersonalDrop(final UUID dropId) {
+    public void removePersonalDrop(final UUID dropId) {
         try (PreparedStatement statement = connection().prepareStatement("DELETE FROM personal_drops WHERE entity_uuid = ?")) {
             statement.setString(1, dropId.toString());
             statement.executeUpdate();
@@ -220,7 +223,7 @@ final class LootStorage {
         }
     }
 
-    List<PersonalDrop> getDropsForOwner(final UUID ownerId, final PersonalDropState... states) {
+    public List<PersonalDrop> getDropsForOwner(final UUID ownerId, final PersonalDropState... states) {
         List<PersonalDrop> drops = new ArrayList<>();
         for (PersonalDrop drop : getPersonalDrops(states)) {
             if (drop.ownerId().equals(ownerId)) {
@@ -230,7 +233,7 @@ final class LootStorage {
         return drops;
     }
 
-    List<PersonalDrop> getPersonalDrops(final PersonalDropState... states) {
+    public List<PersonalDrop> getPersonalDrops(final PersonalDropState... states) {
         Set<PersonalDropState> allowedStates = Set.of(states);
         List<PersonalDrop> drops = new ArrayList<>();
         String sql = "SELECT * FROM personal_drops";
@@ -248,7 +251,7 @@ final class LootStorage {
         }
     }
 
-    Set<UUID> getClaimedFrameIds(final UUID playerId) {
+    public Set<UUID> getClaimedFrameIds(final UUID playerId) {
         Set<UUID> frameIds = new HashSet<>();
         String sql = "SELECT frame_uuid FROM frame_claims WHERE player_uuid = ?";
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
@@ -469,6 +472,7 @@ final class LootStorage {
         try {
             return ItemStack.deserializeItemsFromBytes(bytes);
         } catch (RuntimeException exception) {
+            // Older plugin versions stored BukkitObjectOutputStream blobs; keep them readable.
             return legacyDeserialize(bytes, ItemStack[].class);
         }
     }
@@ -481,6 +485,7 @@ final class LootStorage {
         try {
             return ItemStack.deserializeBytes(bytes);
         } catch (RuntimeException exception) {
+            // Older plugin versions stored BukkitObjectOutputStream blobs; keep them readable.
             return legacyDeserialize(bytes, ItemStack.class);
         }
     }
@@ -499,3 +504,4 @@ final class LootStorage {
         return new IllegalStateException("SQLite loot storage operation failed.", exception);
     }
 }
+

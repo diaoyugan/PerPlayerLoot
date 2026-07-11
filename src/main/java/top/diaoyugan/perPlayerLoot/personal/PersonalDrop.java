@@ -1,10 +1,10 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.personal;
 
 import java.util.UUID;
 import org.bukkit.Location;
 import org.bukkit.inventory.ItemStack;
 
-record PersonalDrop(
+public record PersonalDrop(
     UUID entityId,
     UUID ownerId,
     UUID lootSourceId,
@@ -38,3 +38,4 @@ record PersonalDrop(
         );
     }
 }
+

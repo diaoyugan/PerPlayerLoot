@@ -1,4 +1,4 @@
-package top.diaoyugan.perPlayerLoot;
+package top.diaoyugan.perPlayerLoot.message;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
@@ -17,16 +17,17 @@ import java.util.Map;
 import net.kyori.adventure.text.Component;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
 
-final class Messages {
+public final class Messages {
 
-    static final String FRAME_ALREADY_CLAIMED = "message.perplayerloot.frame_already_claimed";
-    static final String FRAME_ALREADY_CLAIMED_CANNOT_PLACE = "message.perplayerloot.frame_already_claimed_cannot_place";
-    static final String PERSONAL_DROPS_DISABLED = "message.perplayerloot.personal_drops_disabled";
-    static final String NO_CONTAINER_DESTROY_PERMISSION = "message.perplayerloot.no_container_destroy_permission";
-    static final String NO_FRAME_DESTROY_PERMISSION = "message.perplayerloot.no_frame_destroy_permission";
-    static final String RELOAD_SUCCESS = "message.perplayerloot.reload_success";
-    static final String RELOAD_USAGE = "message.perplayerloot.reload_usage";
+    public static final String FRAME_ALREADY_CLAIMED = "message.perplayerloot.frame_already_claimed";
+    public static final String FRAME_ALREADY_CLAIMED_CANNOT_PLACE = "message.perplayerloot.frame_already_claimed_cannot_place";
+    public static final String PERSONAL_DROPS_DISABLED = "message.perplayerloot.personal_drops_disabled";
+    public static final String NO_CONTAINER_DESTROY_PERMISSION = "message.perplayerloot.no_container_destroy_permission";
+    public static final String NO_FRAME_DESTROY_PERMISSION = "message.perplayerloot.no_frame_destroy_permission";
+    public static final String RELOAD_SUCCESS = "message.perplayerloot.reload_success";
+    public static final String RELOAD_USAGE = "message.perplayerloot.reload_usage";
 
     private static final Type LANG_TYPE = new TypeToken<Map<String, String>>() {
     }.getType();
@@ -35,7 +36,7 @@ final class Messages {
     private Messages() {
     }
 
-    static void load(final PerPlayerLoot plugin) {
+    public static void load(final PerPlayerLoot plugin) {
         LANGUAGES.clear();
         File languageFolder = new File(plugin.getDataFolder(), "lang");
         if (!languageFolder.exists() && !languageFolder.mkdirs()) {
@@ -56,11 +57,11 @@ final class Messages {
         }
     }
 
-    static void send(final Player player, final String key) {
+    public static void send(final Player player, final String key) {
         player.sendMessage(Component.text(resolve(player, key)));
     }
 
-    static void send(final CommandSender sender, final String key) {
+    public static void send(final CommandSender sender, final String key) {
         if (sender instanceof Player player) {
             send(player, key);
         } else {
@@ -150,3 +151,4 @@ final class Messages {
         }
     }
 }
+
