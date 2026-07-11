@@ -13,13 +13,6 @@ dependencies:
     ProtocolLib:
       load: BEFORE
       required: false
-commands:
-  perplayerloot:
-    description: Reload PerPlayerLoot configuration and language files.
-    usage: /<command> reload
-    aliases:
-      - ppl
-    permission: perplayerloot.reload
 permissions:
   perplayerloot.reload:
     description: Allows reloading PerPlayerLoot configuration.

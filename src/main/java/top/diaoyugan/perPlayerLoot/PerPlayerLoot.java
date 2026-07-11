@@ -1,7 +1,7 @@
 package top.diaoyugan.perPlayerLoot;
 
+import java.util.List;
 import org.bukkit.NamespacedKey;
-import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class PerPlayerLoot extends JavaPlugin {
@@ -23,23 +23,25 @@ public final class PerPlayerLoot extends JavaPlugin {
         this.personalDropManager = new PersonalDropManager(this, this.lootStorage, this.visibilityAdapter);
         this.personalDropManager.restoreOnlinePlayerDrops();
 
+        LootListener lootListener = new LootListener(
+            this,
+            this.lootStorage,
+            playerPlacedFrameKey,
+            legacyPlayerPlacedFrameKey,
+            this.personalDropManager
+        );
         getServer().getPluginManager().registerEvents(
-            new LootListener(
-                this,
-                this.lootStorage,
-                playerPlacedFrameKey,
-                legacyPlayerPlacedFrameKey,
-                this.personalDropManager
-            ),
+            lootListener,
             this
         );
+        lootListener.tagLoadedLootContainers();
 
-        PluginCommand command = getCommand("perplayerloot");
-        if (command != null) {
-            PerPlayerLootCommand executor = new PerPlayerLootCommand(this);
-            command.setExecutor(executor);
-            command.setTabCompleter(executor);
-        }
+        registerCommand(
+            "perplayerloot",
+            "Reload PerPlayerLoot configuration and language files.",
+            List.of("ppl"),
+            new PerPlayerLootCommand(this)
+        );
     }
 
     @Override

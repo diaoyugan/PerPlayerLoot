@@ -7,6 +7,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
+import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Nameable;
@@ -32,6 +33,7 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.hanging.HangingBreakByEntityEvent;
 import org.bukkit.event.hanging.HangingPlaceEvent;
+import org.bukkit.event.inventory.HopperInventorySearchEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
@@ -215,9 +217,32 @@ final class LootListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onHopperInventorySearch(final HopperInventorySearchEvent event) {
+        if (!this.plugin.getConfig().getBoolean("protect-natural-loot-containers-from-hoppers", true)) {
+            return;
+        }
+
+        if (isManagedNaturalLootContainer(event.getSearchBlock().getState())) {
+            event.setInventory(null);
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onChunkLoad(final ChunkLoadEvent event) {
-        for (BlockState state : event.getChunk().getTileEntities()) {
+        tagLootContainers(event.getChunk());
+    }
+
+    void tagLoadedLootContainers() {
+        for (World world : Bukkit.getWorlds()) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                tagLootContainers(chunk);
+            }
+        }
+    }
+
+    private void tagLootContainers(final Chunk chunk) {
+        for (BlockState state : chunk.getTileEntities()) {
             if (state instanceof Lootable lootable && lootable.getLootTable() != null) {
                 tagLootContainer(state, lootable.getLootTable());
             }
@@ -251,7 +276,7 @@ final class LootListener implements Listener {
             player.getUniqueId(),
             block.getLocation()
         );
-        String customName = container instanceof Nameable nameable ? nameable.getCustomName() : null;
+        Component customName = container instanceof Nameable nameable ? nameable.customName() : null;
         Inventory inventory = customName == null
             ? Bukkit.createInventory(holder, size, Component.translatable(containerTitleKey(block.getType(), size)))
             : Bukkit.createInventory(holder, size, customName);
@@ -377,10 +402,18 @@ final class LootListener implements Listener {
             return;
         }
 
+        String lootTableKey = lootTable.getKey().toString();
+        long seed = state instanceof Lootable lootable ? lootable.getSeed() : 0L;
         PersistentDataContainer dataContainer = tileState.getPersistentDataContainer();
-        dataContainer.set(this.lootContainerTableKey, PersistentDataType.STRING, lootTable.getKey().toString());
-        if (state instanceof Lootable lootable) {
-            dataContainer.set(this.lootContainerSeedKey, PersistentDataType.LONG, lootable.getSeed());
+        if (lootTableKey.equals(dataContainer.get(this.lootContainerTableKey, PersistentDataType.STRING))
+            && (!(state instanceof Lootable)
+                || dataContainer.getOrDefault(this.lootContainerSeedKey, PersistentDataType.LONG, 0L) == seed)) {
+            return;
+        }
+
+        dataContainer.set(this.lootContainerTableKey, PersistentDataType.STRING, lootTableKey);
+        if (state instanceof Lootable) {
+            dataContainer.set(this.lootContainerSeedKey, PersistentDataType.LONG, seed);
         }
         tileState.update(false, false);
     }

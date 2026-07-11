@@ -1,7 +1,6 @@
 package top.diaoyugan.perPlayerLoot;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.sql.Connection;
@@ -23,7 +22,6 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.io.BukkitObjectInputStream;
-import org.bukkit.util.io.BukkitObjectOutputStream;
 
 final class LootStorage {
 
@@ -92,7 +90,7 @@ final class LootStorage {
                     return new ItemStack[size];
                 }
 
-                ItemStack[] storedContents = deserialize(resultSet.getBytes("contents"), ItemStack[].class);
+                ItemStack[] storedContents = deserializeItems(resultSet.getBytes("contents"));
                 ItemStack[] contents = new ItemStack[size];
                 System.arraycopy(storedContents, 0, contents, 0, Math.min(storedContents.length, size));
                 return contents;
@@ -111,7 +109,7 @@ final class LootStorage {
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, containerKey);
             statement.setString(2, playerId.toString());
-            statement.setBytes(3, serialize(contents));
+            statement.setBytes(3, serializeItems(contents));
             statement.executeUpdate();
         } catch (SQLException exception) {
             throw storageException(exception);
@@ -187,7 +185,7 @@ final class LootStorage {
             statement.setString(1, drop.entityId().toString());
             statement.setString(2, drop.ownerId().toString());
             statement.setString(3, drop.lootSourceId().toString());
-            statement.setBytes(4, serialize(drop.itemStack()));
+            statement.setBytes(4, serializeItem(drop.itemStack()));
             statement.setString(5, world == null ? null : world.getUID().toString());
             statement.setDouble(6, location.getX());
             statement.setDouble(7, location.getY());
@@ -429,7 +427,7 @@ final class LootStorage {
             UUID.fromString(resultSet.getString("entity_uuid")),
             UUID.fromString(resultSet.getString("owner_uuid")),
             UUID.fromString(resultSet.getString("source_uuid")),
-            deserialize(resultSet.getBytes("item"), ItemStack.class),
+            deserializeItem(resultSet.getBytes("item")),
             location,
             resultSet.getLong("created"),
             PersonalDropState.valueOf(resultSet.getString("state"))
@@ -463,17 +461,32 @@ final class LootStorage {
         return this.connection;
     }
 
-    private byte[] serialize(final Object object) {
-        try (ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
-             BukkitObjectOutputStream objectStream = new BukkitObjectOutputStream(byteStream)) {
-            objectStream.writeObject(object);
-            return byteStream.toByteArray();
-        } catch (IOException exception) {
-            throw new IllegalStateException("Could not serialize loot data.", exception);
+    private static byte[] serializeItems(final ItemStack[] items) {
+        return ItemStack.serializeItemsAsBytes(items);
+    }
+
+    private static ItemStack[] deserializeItems(final byte[] bytes) {
+        try {
+            return ItemStack.deserializeItemsFromBytes(bytes);
+        } catch (RuntimeException exception) {
+            return legacyDeserialize(bytes, ItemStack[].class);
         }
     }
 
-    private <T> T deserialize(final byte[] bytes, final Class<T> type) {
+    private static byte[] serializeItem(final ItemStack item) {
+        return item.serializeAsBytes();
+    }
+
+    private static ItemStack deserializeItem(final byte[] bytes) {
+        try {
+            return ItemStack.deserializeBytes(bytes);
+        } catch (RuntimeException exception) {
+            return legacyDeserialize(bytes, ItemStack.class);
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static <T> T legacyDeserialize(final byte[] bytes, final Class<T> type) {
         try (ByteArrayInputStream byteStream = new ByteArrayInputStream(bytes);
              BukkitObjectInputStream objectStream = new BukkitObjectInputStream(byteStream)) {
             return type.cast(objectStream.readObject());
