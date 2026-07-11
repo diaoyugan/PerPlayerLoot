@@ -206,7 +206,7 @@ final class LootListener implements Listener {
         }
 
         if (event.getDamager() instanceof Player player) {
-            if (player.isSneaking() && canDestroyNaturalLootFrame(player)) {
+            if (canDestroyNaturalLootFrame(player)) {
                 return;
             }
             event.setCancelled(true);
@@ -473,7 +473,9 @@ final class LootListener implements Listener {
 
     private boolean canDestroyNaturalLootFrame(final Player player) {
         return this.plugin.getConfig().getBoolean("allow-destroy-natural-loot-frames", false)
-            || player.hasPermission("perplayerloot.destroy.frames");
+            || (player.isSneaking()
+                && (this.plugin.getConfig().getBoolean("allow-sneak-destroy-natural-loot-frames", false)
+                    || player.hasPermission("perplayerloot.destroy.frames")));
     }
 
     private static String containerKey(final Location location) {

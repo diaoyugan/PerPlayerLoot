@@ -43,6 +43,7 @@ config-version: 1
 
 allow-destroy-natural-loot-containers: false
 allow-destroy-natural-loot-frames: false
+allow-sneak-destroy-natural-loot-frames: false
 protect-natural-loot-containers-from-hoppers: true
 
 database:
@@ -62,8 +63,12 @@ loot-frame-materials:
   - `false`：只有拥有 `perplayerloot.destroy.containers` 权限的玩家可以破坏。
 
 - `allow-destroy-natural-loot-frames`
-  - `true`：所有玩家都可以破坏自然战利品展示框。
-  - `false`：只有拥有 `perplayerloot.destroy.frames` 权限的玩家可以破坏。
+  - `true`：所有玩家都可以不蹲下直接破坏自然战利品展示框。
+  - `false`：自然战利品展示框破坏行为使用下面的蹲下破坏规则。
+
+- `allow-sneak-destroy-natural-loot-frames`
+  - `true`：玩家蹲下时可以破坏自然战利品展示框。
+  - `false`：只有拥有 `perplayerloot.destroy.frames` 权限的玩家可以蹲下破坏。
 
 - `protect-natural-loot-containers-from-hoppers`
   - 阻止漏斗或其他容器搬运受管理自然战利品容器中的物品。
@@ -103,7 +108,7 @@ perplayerloot.destroy.frames
 
 - `perplayerloot.reload`：允许使用 `/perplayerloot reload` 和 `/ppl reload`。
 - `perplayerloot.destroy.containers`：当全局破坏开关关闭时，允许破坏自然战利品容器。
-- `perplayerloot.destroy.frames`：当全局破坏开关关闭时，允许破坏自然战利品展示框。
+- `perplayerloot.destroy.frames`：当全局展示框破坏和普通玩家蹲下破坏都关闭时，允许蹲下破坏自然战利品展示框。
 
 ## 语言文件
 

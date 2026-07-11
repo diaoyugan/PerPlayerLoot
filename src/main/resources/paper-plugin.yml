@@ -21,5 +21,5 @@ permissions:
     description: Allows destroying natural loot containers when config protection is enabled.
     default: op
   perplayerloot.destroy.frames:
-    description: Allows destroying natural loot item frames when config protection is enabled.
+    description: Allows destroying natural loot item frames while sneaking when ordinary sneak destruction is disabled.
     default: op

@@ -43,6 +43,7 @@ config-version: 1
 
 allow-destroy-natural-loot-containers: false
 allow-destroy-natural-loot-frames: false
+allow-sneak-destroy-natural-loot-frames: false
 protect-natural-loot-containers-from-hoppers: true
 
 database:
@@ -62,8 +63,12 @@ Options:
   - `false`: only players with `perplayerloot.destroy.containers` can destroy them.
 
 - `allow-destroy-natural-loot-frames`
-  - `true`: everyone can destroy natural loot item frames.
-  - `false`: only players with `perplayerloot.destroy.frames` can destroy them.
+  - `true`: everyone can destroy natural loot item frames without sneaking.
+  - `false`: natural loot item frame destruction uses the sneak-destroy rule below.
+
+- `allow-sneak-destroy-natural-loot-frames`
+  - `true`: players can destroy natural loot item frames while sneaking.
+  - `false`: only players with `perplayerloot.destroy.frames` can destroy them while sneaking.
 
 - `protect-natural-loot-containers-from-hoppers`
   - Blocks hopper/container transfer involving managed natural loot containers.
@@ -103,7 +108,7 @@ perplayerloot.destroy.frames
 
 - `perplayerloot.reload`: allows using `/perplayerloot reload` and `/ppl reload`.
 - `perplayerloot.destroy.containers`: allows destroying natural loot containers when global destroy is disabled.
-- `perplayerloot.destroy.frames`: allows destroying natural loot item frames when global destroy is disabled.
+- `perplayerloot.destroy.frames`: allows sneaking players to destroy natural loot item frames when both global frame destruction and ordinary sneak destruction are disabled.
 
 ## Language Files
 
