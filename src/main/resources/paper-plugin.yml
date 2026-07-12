@@ -14,6 +14,9 @@ dependencies:
       load: BEFORE
       required: false
 permissions:
+  perplayerloot.admin:
+    description: Allows administering PerPlayerLoot.
+    default: op
   perplayerloot.reload:
     description: Allows reloading PerPlayerLoot configuration.
     default: op

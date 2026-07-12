@@ -10,8 +10,10 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Level;
@@ -51,6 +53,7 @@ public final class LootStorage {
             }
             createTables();
             migrateYamlIfNeeded();
+            removeTerminalPersonalDrops();
         } catch (SQLException exception) {
             throw new IllegalStateException("Could not open SQLite loot storage.", exception);
         }
@@ -104,15 +107,31 @@ public final class LootStorage {
     }
 
     public void setContainerInventory(final String containerKey, final UUID playerId, final ItemStack[] contents) {
+        StoredContainer storedContainer = StoredContainer.fromKey(containerKey);
         String sql = """
-            INSERT INTO container_inventories(container_key, player_uuid, contents)
-            VALUES(?, ?, ?)
-            ON CONFLICT(container_key, player_uuid) DO UPDATE SET contents = excluded.contents
+            INSERT INTO container_inventories(
+                container_key, player_uuid, contents, world_uuid, chunk_x, chunk_z, block_x, block_y, block_z
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(container_key, player_uuid) DO UPDATE SET
+                contents = excluded.contents,
+                world_uuid = excluded.world_uuid,
+                chunk_x = excluded.chunk_x,
+                chunk_z = excluded.chunk_z,
+                block_x = excluded.block_x,
+                block_y = excluded.block_y,
+                block_z = excluded.block_z
             """;
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, containerKey);
             statement.setString(2, playerId.toString());
             statement.setBytes(3, serializeItems(contents));
+            statement.setString(4, storedContainer.worldId().toString());
+            statement.setInt(5, storedContainer.chunkX());
+            statement.setInt(6, storedContainer.chunkZ());
+            statement.setInt(7, storedContainer.blockX());
+            statement.setInt(8, storedContainer.blockY());
+            statement.setInt(9, storedContainer.blockZ());
             statement.executeUpdate();
         } catch (SQLException exception) {
             throw storageException(exception);
@@ -135,6 +154,37 @@ public final class LootStorage {
         try (PreparedStatement statement = connection().prepareStatement("DELETE FROM container_inventories WHERE container_key = ?")) {
             statement.setString(1, containerKey);
             statement.executeUpdate();
+        } catch (SQLException exception) {
+            throw storageException(exception);
+        }
+    }
+
+    public List<StoredContainer> getContainerDataInChunk(final UUID worldId, final int chunkX, final int chunkZ) {
+        String sql = """
+            SELECT DISTINCT container_key, world_uuid, chunk_x, chunk_z, block_x, block_y, block_z
+            FROM container_inventories
+            WHERE world_uuid = ? AND chunk_x = ? AND chunk_z = ?
+            """;
+        try (PreparedStatement statement = connection().prepareStatement(sql)) {
+            statement.setString(1, worldId.toString());
+            statement.setInt(2, chunkX);
+            statement.setInt(3, chunkZ);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return readStoredContainers(resultSet);
+            }
+        } catch (SQLException exception) {
+            throw storageException(exception);
+        }
+    }
+
+    public List<StoredContainer> getAllContainerData() {
+        String sql = """
+            SELECT DISTINCT container_key, world_uuid, chunk_x, chunk_z, block_x, block_y, block_z
+            FROM container_inventories
+            """;
+        try (PreparedStatement statement = connection().prepareStatement(sql);
+             ResultSet resultSet = statement.executeQuery()) {
+            return readStoredContainers(resultSet);
         } catch (SQLException exception) {
             throw storageException(exception);
         }
@@ -204,6 +254,11 @@ public final class LootStorage {
     }
 
     public void setPersonalDropState(final UUID dropId, final PersonalDropState state) {
+        if (state == PersonalDropState.PICKED_UP || state == PersonalDropState.EXPIRED) {
+            removePersonalDrop(dropId);
+            return;
+        }
+
         String sql = "UPDATE personal_drops SET state = ? WHERE entity_uuid = ?";
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, state.name());
@@ -224,28 +279,66 @@ public final class LootStorage {
     }
 
     public List<PersonalDrop> getDropsForOwner(final UUID ownerId, final PersonalDropState... states) {
-        List<PersonalDrop> drops = new ArrayList<>();
-        for (PersonalDrop drop : getPersonalDrops(states)) {
-            if (drop.ownerId().equals(ownerId)) {
-                drops.add(drop);
-            }
-        }
-        return drops;
+        return getPersonalDrops(ownerId, states);
     }
 
     public List<PersonalDrop> getPersonalDrops(final PersonalDropState... states) {
-        Set<PersonalDropState> allowedStates = Set.of(states);
+        return getPersonalDrops(null, states);
+    }
+
+    private List<PersonalDrop> getPersonalDrops(final UUID ownerId, final PersonalDropState... states) {
         List<PersonalDrop> drops = new ArrayList<>();
-        String sql = "SELECT * FROM personal_drops";
-        try (PreparedStatement statement = connection().prepareStatement(sql);
-             ResultSet resultSet = statement.executeQuery()) {
-            while (resultSet.next()) {
-                PersonalDrop drop = readPersonalDrop(resultSet);
-                if (drop != null && allowedStates.contains(drop.state())) {
-                    drops.add(drop);
+        try (PreparedStatement statement = connection().prepareStatement(personalDropQuery(ownerId, states))) {
+            int parameterIndex = 1;
+            if (ownerId != null) {
+                statement.setString(parameterIndex++, ownerId.toString());
+            }
+            for (PersonalDropState state : states) {
+                statement.setString(parameterIndex++, state.name());
+            }
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    readPersonalDrop(resultSet, drops);
                 }
             }
             return drops;
+        } catch (SQLException exception) {
+            throw storageException(exception);
+        }
+    }
+
+    private String personalDropQuery(final UUID ownerId, final PersonalDropState... states) {
+        List<String> conditions = new ArrayList<>();
+        if (ownerId != null) {
+            conditions.add("owner_uuid = ?");
+        }
+        if (states.length > 0) {
+            conditions.add("state IN (" + String.join(", ", java.util.Collections.nCopies(states.length, "?")) + ")");
+        }
+        if (conditions.isEmpty()) {
+            return "SELECT * FROM personal_drops";
+        }
+        return "SELECT * FROM personal_drops WHERE " + String.join(" AND ", conditions);
+    }
+
+    private void readPersonalDrop(final ResultSet resultSet, final List<PersonalDrop> drops) throws SQLException {
+        String entityId = resultSet.getString("entity_uuid");
+        try {
+            PersonalDrop drop = readPersonalDrop(resultSet);
+            if (drop != null) {
+                drops.add(drop);
+            }
+        } catch (RuntimeException exception) {
+            this.plugin.getLogger().log(Level.WARNING, "Skipping corrupt personal drop row " + entityId + ".", exception);
+        }
+    }
+
+    public void removeTerminalPersonalDrops() {
+        String sql = "DELETE FROM personal_drops WHERE state IN (?, ?)";
+        try (PreparedStatement statement = connection().prepareStatement(sql)) {
+            statement.setString(1, PersonalDropState.PICKED_UP.name());
+            statement.setString(2, PersonalDropState.EXPIRED.name());
+            statement.executeUpdate();
         } catch (SQLException exception) {
             throw storageException(exception);
         }
@@ -274,8 +367,19 @@ public final class LootStorage {
                     container_key TEXT NOT NULL,
                     player_uuid TEXT NOT NULL,
                     contents BLOB NOT NULL,
+                    world_uuid TEXT,
+                    chunk_x INTEGER,
+                    chunk_z INTEGER,
+                    block_x INTEGER,
+                    block_y INTEGER,
+                    block_z INTEGER,
                     PRIMARY KEY(container_key, player_uuid)
                 )
+                """);
+            addContainerLocationColumns(statement);
+            statement.execute("""
+                CREATE INDEX IF NOT EXISTS idx_container_inventories_chunk
+                ON container_inventories(world_uuid, chunk_x, chunk_z)
                 """);
             statement.execute("""
                 CREATE TABLE IF NOT EXISTS frame_claims (
@@ -300,6 +404,96 @@ public final class LootStorage {
                     state TEXT NOT NULL
                 )
                 """);
+            statement.execute("""
+                CREATE INDEX IF NOT EXISTS idx_personal_drops_owner_state
+                ON personal_drops(owner_uuid, state)
+                """);
+            statement.execute("""
+                CREATE INDEX IF NOT EXISTS idx_personal_drops_source
+                ON personal_drops(source_uuid)
+                """);
+            statement.execute("""
+                CREATE INDEX IF NOT EXISTS idx_personal_drops_state
+                ON personal_drops(state)
+                """);
+        }
+        removeTerminalPersonalDrops();
+    }
+
+    private void addContainerLocationColumns(final Statement statement) throws SQLException {
+        Set<String> columns = tableColumns("container_inventories");
+        addColumnIfMissing(statement, columns, "world_uuid", "TEXT");
+        addColumnIfMissing(statement, columns, "chunk_x", "INTEGER");
+        addColumnIfMissing(statement, columns, "chunk_z", "INTEGER");
+        addColumnIfMissing(statement, columns, "block_x", "INTEGER");
+        addColumnIfMissing(statement, columns, "block_y", "INTEGER");
+        addColumnIfMissing(statement, columns, "block_z", "INTEGER");
+        backfillContainerLocationColumns();
+    }
+
+    private Set<String> tableColumns(final String tableName) throws SQLException {
+        Set<String> columns = new HashSet<>();
+        try (Statement statement = connection().createStatement();
+             ResultSet resultSet = statement.executeQuery("PRAGMA table_info(" + tableName + ")")) {
+            while (resultSet.next()) {
+                columns.add(resultSet.getString("name"));
+            }
+        }
+        return columns;
+    }
+
+    private void addColumnIfMissing(
+        final Statement statement,
+        final Set<String> columns,
+        final String columnName,
+        final String columnType
+    ) throws SQLException {
+        if (columns.contains(columnName)) {
+            return;
+        }
+        statement.execute("ALTER TABLE container_inventories ADD COLUMN " + columnName + " " + columnType);
+    }
+
+    private void backfillContainerLocationColumns() throws SQLException {
+        Map<String, StoredContainer> containers = new HashMap<>();
+        try (Statement statement = connection().createStatement();
+             ResultSet resultSet = statement.executeQuery("""
+                 SELECT DISTINCT container_key
+                 FROM container_inventories
+                 WHERE world_uuid IS NULL
+                    OR chunk_x IS NULL
+                    OR chunk_z IS NULL
+                    OR block_x IS NULL
+                    OR block_y IS NULL
+                    OR block_z IS NULL
+                 """)) {
+            while (resultSet.next()) {
+                String containerKey = resultSet.getString("container_key");
+                try {
+                    containers.put(containerKey, StoredContainer.fromKey(containerKey));
+                } catch (RuntimeException exception) {
+                    this.plugin.getLogger().log(Level.WARNING, "Could not parse stored container key " + containerKey + ".", exception);
+                }
+            }
+        }
+
+        String sql = """
+            UPDATE container_inventories
+            SET world_uuid = ?, chunk_x = ?, chunk_z = ?, block_x = ?, block_y = ?, block_z = ?
+            WHERE container_key = ?
+            """;
+        try (PreparedStatement statement = connection().prepareStatement(sql)) {
+            for (StoredContainer container : containers.values()) {
+                statement.setString(1, container.worldId().toString());
+                statement.setInt(2, container.chunkX());
+                statement.setInt(3, container.chunkZ());
+                statement.setInt(4, container.blockX());
+                statement.setInt(5, container.blockY());
+                statement.setInt(6, container.blockZ());
+                statement.setString(7, container.containerKey());
+                statement.addBatch();
+            }
+            statement.executeBatch();
         }
     }
 
@@ -502,6 +696,70 @@ public final class LootStorage {
 
     private IllegalStateException storageException(final SQLException exception) {
         return new IllegalStateException("SQLite loot storage operation failed.", exception);
+    }
+
+    private List<StoredContainer> readStoredContainers(final ResultSet resultSet) throws SQLException {
+        List<StoredContainer> containers = new ArrayList<>();
+        while (resultSet.next()) {
+            try {
+                containers.add(readStoredContainer(resultSet));
+            } catch (RuntimeException exception) {
+                this.plugin.getLogger().log(
+                    Level.WARNING,
+                    "Skipping corrupt stored container row " + resultSet.getString("container_key") + ".",
+                    exception
+                );
+            }
+        }
+        return containers;
+    }
+
+    private StoredContainer readStoredContainer(final ResultSet resultSet) throws SQLException {
+        String containerKey = resultSet.getString("container_key");
+        String worldId = resultSet.getString("world_uuid");
+        if (worldId == null || worldId.isBlank()) {
+            return StoredContainer.fromKey(containerKey);
+        }
+        return new StoredContainer(
+            containerKey,
+            UUID.fromString(worldId),
+            resultSet.getInt("chunk_x"),
+            resultSet.getInt("chunk_z"),
+            resultSet.getInt("block_x"),
+            resultSet.getInt("block_y"),
+            resultSet.getInt("block_z")
+        );
+    }
+
+    public record StoredContainer(
+        String containerKey,
+        UUID worldId,
+        int chunkX,
+        int chunkZ,
+        int blockX,
+        int blockY,
+        int blockZ
+    ) {
+
+        private static StoredContainer fromKey(final String containerKey) {
+            String[] parts = containerKey.split(";");
+            if (parts.length != 4) {
+                throw new IllegalArgumentException("Invalid container key: " + containerKey);
+            }
+
+            int blockX = Integer.parseInt(parts[1]);
+            int blockY = Integer.parseInt(parts[2]);
+            int blockZ = Integer.parseInt(parts[3]);
+            return new StoredContainer(
+                containerKey,
+                UUID.fromString(parts[0]),
+                Math.floorDiv(blockX, 16),
+                Math.floorDiv(blockZ, 16),
+                blockX,
+                blockY,
+                blockZ
+            );
+        }
     }
 }
 

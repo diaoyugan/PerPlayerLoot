@@ -52,6 +52,7 @@ import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
 import top.diaoyugan.perPlayerLoot.message.Messages;
 import top.diaoyugan.perPlayerLoot.personal.PersonalDropManager;
 import top.diaoyugan.perPlayerLoot.storage.LootStorage;
+import top.diaoyugan.perPlayerLoot.storage.LootStorage.StoredContainer;
 
 public final class LootListener implements Listener {
 
@@ -108,12 +109,13 @@ public final class LootListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onBlockBreak(final BlockBreakEvent event) {
         BlockState state = event.getBlock().getState();
-        if (!isManagedNaturalLootContainer(state)) {
+        String containerKey = containerKey(event.getBlock().getLocation());
+        if (!isManagedNaturalLootContainer(state) && !this.storage.hasContainerData(containerKey)) {
             return;
         }
 
         if (canDestroyNaturalLootContainer(event.getPlayer())) {
-            this.storage.removeContainerData(containerKey(event.getBlock().getLocation()));
+            this.storage.removeContainerData(containerKey);
             return;
         }
 
@@ -256,6 +258,7 @@ public final class LootListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onChunkLoad(final ChunkLoadEvent event) {
         tagLootContainers(event.getChunk());
+        cleanupOrphanContainerData(event.getChunk());
     }
 
     public void tagLoadedLootContainers() {
@@ -263,8 +266,53 @@ public final class LootListener implements Listener {
         for (World world : Bukkit.getWorlds()) {
             for (Chunk chunk : world.getLoadedChunks()) {
                 tagLootContainers(chunk);
+                cleanupOrphanContainerData(chunk);
             }
         }
+    }
+
+    public int cleanupOrphanContainerDataForLoadedChunks() {
+        int removed = 0;
+        for (StoredContainer container : this.storage.getAllContainerData()) {
+            World world = Bukkit.getWorld(container.worldId());
+            if (world == null) {
+                this.storage.removeContainerData(container.containerKey());
+                removed++;
+                continue;
+            }
+            if (!world.isChunkLoaded(container.chunkX(), container.chunkZ())) {
+                continue;
+            }
+            if (removeOrphanContainerData(world, container)) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    private void cleanupOrphanContainerData(final Chunk chunk) {
+        for (StoredContainer container : this.storage.getContainerDataInChunk(
+            chunk.getWorld().getUID(),
+            chunk.getX(),
+            chunk.getZ()
+        )) {
+            removeOrphanContainerData(chunk.getWorld(), container);
+        }
+    }
+
+    private boolean removeOrphanContainerData(final World world, final StoredContainer container) {
+        if (container.blockY() < world.getMinHeight() || container.blockY() >= world.getMaxHeight()) {
+            this.storage.removeContainerData(container.containerKey());
+            return true;
+        }
+
+        Block block = world.getBlockAt(container.blockX(), container.blockY(), container.blockZ());
+        if (isManagedNaturalLootContainer(block.getState())) {
+            return false;
+        }
+
+        this.storage.removeContainerData(container.containerKey());
+        return true;
     }
 
     private void tagLootContainers(final Chunk chunk) {

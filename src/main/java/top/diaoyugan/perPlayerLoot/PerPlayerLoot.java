@@ -48,7 +48,7 @@ public final class PerPlayerLoot extends JavaPlugin {
             "perplayerloot",
             "Reload PerPlayerLoot configuration and language files.",
             List.of("ppl"),
-            new PerPlayerLootCommand(this)
+            new PerPlayerLootCommand(this, lootListener)
         );
     }
 

@@ -230,7 +230,7 @@ public final class PersonalDropManager implements Listener {
             return;
         }
 
-        this.storage.setPersonalDropState(entityId, PersonalDropState.PICKED_UP);
+        this.storage.removePersonalDrop(entityId);
         if (this.visibilityAdapter != null) {
             this.visibilityAdapter.unregisterEntity(entityId);
         }
@@ -261,7 +261,7 @@ public final class PersonalDropManager implements Listener {
         String action = this.plugin.getConfig().getString("personal-drop-timeout-action", "RECOVER");
         if ("EXPIRE".equalsIgnoreCase(action)) {
             this.activeDrops.remove(drop.entityId());
-            this.storage.setPersonalDropState(drop.entityId(), PersonalDropState.EXPIRED);
+            this.storage.removePersonalDrop(drop.entityId());
             if (this.visibilityAdapter != null) {
                 this.visibilityAdapter.unregisterEntity(drop.entityId());
             }
