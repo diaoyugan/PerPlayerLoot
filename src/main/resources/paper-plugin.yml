@@ -6,7 +6,7 @@ prefix: PerPlayerLoot
 main: top.diaoyugan.perPlayerLoot.PerPlayerLoot
 bootstrapper: top.diaoyugan.perPlayerLoot.PerPlayerLootBootstrap
 loader: top.diaoyugan.perPlayerLoot.PerPlayerLootLoader
-api-version: '1.21.11'
+api-version: '26.2'
 load: POSTWORLD
 dependencies:
   server:

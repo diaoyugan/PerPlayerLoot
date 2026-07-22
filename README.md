@@ -1,6 +1,6 @@
 # PerPlayerLoot
 
-PerPlayerLoot is a Paper plugin for Minecraft 1.21.11 that makes natural loot containers and selected natural item-frame loot per-player.
+PerPlayerLoot is a Paper plugin for Minecraft 26.2 that makes natural loot containers and selected natural item-frame loot per-player.
 
 Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
 
@@ -18,8 +18,8 @@ Chinese documentation: [README.zh-CN.md](README.zh-CN.md)
 
 ## Requirements
 
-- Paper 1.21.11
-- Java 21
+- Paper 26.2
+- Java 25
 - ProtocolLib is optional but required for personal item-frame drops.
 
 If ProtocolLib is not installed, the plugin still enables, but personal item-frame drops are disabled and a warning is logged.
@@ -28,9 +28,9 @@ If ProtocolLib is not installed, the plugin still enables, but personal item-fra
 
 1. Build the plugin:
    ```bash
-   gradle build
+   ./gradlew build
    ```
-2. Copy `build/libs/PerPlayerLoot-1.0-SNAPSHOT.jar` to the server `plugins` folder.
+2. Copy the generated `build/libs/PerPlayerLoot-<version>.jar` to the server `plugins` folder.
 3. Install ProtocolLib if you want personal item-frame drops.
 4. Restart the server.
 
