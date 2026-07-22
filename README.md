@@ -42,6 +42,7 @@ Default `config.yml`:
 config-version: 1
 
 allow-destroy-natural-loot-containers: false
+allow-merge-natural-loot-containers: false
 allow-destroy-natural-loot-frames: false
 allow-sneak-destroy-natural-loot-frames: false
 protect-natural-loot-containers-from-hoppers: true
@@ -61,6 +62,10 @@ Options:
 - `allow-destroy-natural-loot-containers`
   - `true`: everyone can destroy natural loot containers.
   - `false`: only players with `perplayerloot.destroy.containers` can destroy them.
+
+- `allow-merge-natural-loot-containers`
+  - `true`: everyone can merge placed chests with natural loot containers.
+  - `false`: only players with `perplayerloot.merge.containers` can merge them.
 
 - `allow-destroy-natural-loot-frames`
   - `true`: everyone can destroy natural loot item frames without sneaking.
@@ -103,11 +108,13 @@ Reloads `config.yml` and external language files.
 ```text
 perplayerloot.reload
 perplayerloot.destroy.containers
+perplayerloot.merge.containers
 perplayerloot.destroy.frames
 ```
 
 - `perplayerloot.reload`: allows using `/perplayerloot reload` and `/ppl reload`.
 - `perplayerloot.destroy.containers`: allows destroying natural loot containers when global destroy is disabled.
+- `perplayerloot.merge.containers`: allows merging placed chests with natural loot containers when global merging is disabled.
 - `perplayerloot.destroy.frames`: allows sneaking players to destroy natural loot item frames when both global frame destruction and ordinary sneak destruction are disabled.
 
 ## Language Files

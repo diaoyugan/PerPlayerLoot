@@ -1,6 +1,7 @@
 config-version: 1
 
 allow-destroy-natural-loot-containers: false
+allow-merge-natural-loot-containers: false
 allow-destroy-natural-loot-frames: false
 allow-sneak-destroy-natural-loot-frames: false
 protect-natural-loot-containers-from-hoppers: true

@@ -14,10 +14,12 @@ import org.bukkit.Nameable;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Container;
 import org.bukkit.block.Lidded;
 import org.bukkit.block.TileState;
+import org.bukkit.block.data.type.Chest;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Hanging;
@@ -29,6 +31,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.hanging.HangingBreakByEntityEvent;
@@ -39,6 +42,7 @@ import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.event.world.ChunkPopulateEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.BlockInventoryHolder;
 import org.bukkit.inventory.ItemStack;
@@ -57,6 +61,12 @@ import top.diaoyugan.perPlayerLoot.storage.LootStorage.StoredContainer;
 public final class LootListener implements Listener {
 
     private static final byte TRUE = 1;
+    private static final BlockFace[] HORIZONTAL_FACES = {
+        BlockFace.NORTH,
+        BlockFace.EAST,
+        BlockFace.SOUTH,
+        BlockFace.WEST
+    };
 
     private final PerPlayerLoot plugin;
     private final LootStorage storage;
@@ -89,9 +99,11 @@ public final class LootListener implements Listener {
             return;
         }
 
+        tagNaturalLootChestsNearPlacement(event);
+
         Block block = event.getClickedBlock();
         BlockState state = block.getState();
-        if (!(state instanceof Container container) || !(state instanceof Lootable lootable)) {
+        if (!(state instanceof Container) || !(state instanceof Lootable lootable)) {
             return;
         }
 
@@ -102,8 +114,16 @@ public final class LootListener implements Listener {
         }
 
         tagLootContainer(state, lootTable);
+        separateManagedChest(block);
+
+        // Splitting changes the physical container view, so never use the pre-split snapshot.
+        state = block.getState();
+        if (!(state instanceof Container singleContainer)) {
+            return;
+        }
+
         event.setCancelled(true);
-        openPerPlayerContainer(event.getPlayer(), block, container, lootTable);
+        openPerPlayerContainer(event.getPlayer(), block, singleContainer, lootTable);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -121,6 +141,86 @@ public final class LootListener implements Listener {
 
         event.setCancelled(true);
         Messages.send(event.getPlayer(), Messages.NO_CONTAINER_DESTROY_PERMISSION);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onChestPlace(final BlockPlaceEvent event) {
+        if (canMergeNaturalLootContainer(event.getPlayer())) {
+            return;
+        }
+
+        Block placedBlock = event.getBlockPlaced();
+        if (!(placedBlock.getBlockData() instanceof Chest)) {
+            return;
+        }
+
+        for (BlockFace face : HORIZONTAL_FACES) {
+            Block adjacentBlock = placedBlock.getRelative(face);
+            if (adjacentBlock.getType() != placedBlock.getType()
+                || !(adjacentBlock.getBlockData() instanceof Chest)
+                || !isManagedNaturalLootContainer(adjacentBlock.getState())) {
+                continue;
+            }
+
+            // Match vanilla sneak-placement behavior without cancelling the placement.
+            separateChestPair(placedBlock, adjacentBlock);
+            // Paper may finish neighbor-state updates after BlockPlaceEvent listeners return.
+            Bukkit.getScheduler().runTask(
+                this.plugin,
+                () -> separateChestPair(placedBlock, adjacentBlock)
+            );
+            return;
+        }
+    }
+
+    private void tagNaturalLootChestsNearPlacement(final PlayerInteractEvent event) {
+        ItemStack item = event.getItem();
+        if (item == null || (item.getType() != Material.CHEST && item.getType() != Material.TRAPPED_CHEST)) {
+            return;
+        }
+
+        Block clickedBlock = event.getClickedBlock();
+        tagNaturalLootChestNeighbors(clickedBlock);
+        tagNaturalLootChestNeighbors(clickedBlock.getRelative(event.getBlockFace()));
+    }
+
+    private void tagNaturalLootChestNeighbors(final Block center) {
+        for (BlockFace face : HORIZONTAL_FACES) {
+            Block block = center.getRelative(face);
+            BlockState state = block.getState();
+            if (state.getBlockData() instanceof Chest
+                && state instanceof Lootable lootable
+                && lootable.getLootTable() != null) {
+                tagLootContainer(state, lootable.getLootTable());
+            }
+        }
+    }
+
+    private static void separateManagedChest(final Block managedBlock) {
+        if (!(managedBlock.getBlockData() instanceof Chest)) {
+            return;
+        }
+
+        for (BlockFace face : HORIZONTAL_FACES) {
+            Block adjacentBlock = managedBlock.getRelative(face);
+            if (adjacentBlock.getType() == managedBlock.getType()
+                && adjacentBlock.getBlockData() instanceof Chest) {
+                separateChestPair(managedBlock, adjacentBlock);
+            }
+        }
+    }
+
+    private static void separateChestPair(final Block placedBlock, final Block adjacentBlock) {
+        if (placedBlock.getType() != adjacentBlock.getType()
+            || !(placedBlock.getBlockData() instanceof Chest placedChest)
+            || !(adjacentBlock.getBlockData() instanceof Chest adjacentChest)) {
+            return;
+        }
+
+        placedChest.setType(Chest.Type.SINGLE);
+        placedBlock.setBlockData(placedChest, false);
+        adjacentChest.setType(Chest.Type.SINGLE);
+        adjacentBlock.setBlockData(adjacentChest, false);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -259,6 +359,12 @@ public final class LootListener implements Listener {
     public void onChunkLoad(final ChunkLoadEvent event) {
         tagLootContainers(event.getChunk());
         cleanupOrphanContainerData(event.getChunk());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onChunkPopulate(final ChunkPopulateEvent event) {
+        // Generated tile entities can be added after ChunkLoadEvent has already fired.
+        tagLootContainers(event.getChunk());
     }
 
     public void tagLoadedLootContainers() {
@@ -507,15 +613,19 @@ public final class LootListener implements Listener {
             return;
         }
 
-        if (state instanceof Container container) {
-            container.getInventory().clear();
+        String containerKey = containerKey(block.getLocation());
+        if (!hasManagedLootContainerTag(state) && !this.storage.hasContainerData(containerKey)) {
+            return;
         }
+
+        // Losing plugin management must never modify the container's physical inventory.
+        // Only remove PerPlayerLoot metadata and the corresponding database records.
         if (state instanceof TileState tileState) {
             tileState.getPersistentDataContainer().remove(this.lootContainerTableKey);
             tileState.getPersistentDataContainer().remove(this.lootContainerSeedKey);
             tileState.update(false, false);
         }
-        this.storage.removeContainerData(containerKey(block.getLocation()));
+        this.storage.removeContainerData(containerKey);
     }
 
     private void cleanupDestroyedLootContainer(final Block block) {
@@ -528,6 +638,11 @@ public final class LootListener implements Listener {
     private boolean canDestroyNaturalLootContainer(final Player player) {
         return this.plugin.getConfig().getBoolean("allow-destroy-natural-loot-containers", false)
             || player.hasPermission("perplayerloot.destroy.containers");
+    }
+
+    private boolean canMergeNaturalLootContainer(final Player player) {
+        return this.plugin.getConfig().getBoolean("allow-merge-natural-loot-containers", false)
+            || player.hasPermission("perplayerloot.merge.containers");
     }
 
     private boolean canDestroyNaturalLootFrame(final Player player) {
