@@ -1,37 +1,30 @@
 package top.diaoyugan.perPlayerLoot.listener;
 
+import java.util.List;
 import java.util.UUID;
-import org.bukkit.Location;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.jetbrains.annotations.NotNull;
 
 final class PerPlayerLootInventoryHolder implements InventoryHolder {
 
-    private final String containerKey;
     private final UUID playerId;
-    private final Location containerLocation;
+    private final List<InventoryPart> parts;
 
     PerPlayerLootInventoryHolder(
-        final String containerKey,
         final UUID playerId,
-        final Location containerLocation
+        final List<InventoryPart> parts
     ) {
-        this.containerKey = containerKey;
         this.playerId = playerId;
-        this.containerLocation = containerLocation.clone();
-    }
-
-    String containerKey() {
-        return this.containerKey;
+        this.parts = List.copyOf(parts);
     }
 
     UUID playerId() {
         return this.playerId;
     }
 
-    Location containerLocation() {
-        return this.containerLocation.clone();
+    List<InventoryPart> parts() {
+        return this.parts;
     }
 
     @Override

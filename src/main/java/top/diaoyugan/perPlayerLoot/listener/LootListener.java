@@ -1,7 +1,9 @@
 package top.diaoyugan.perPlayerLoot.listener;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -17,6 +19,7 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.Container;
+import org.bukkit.block.DoubleChest;
 import org.bukkit.block.Lidded;
 import org.bukkit.block.TileState;
 import org.bukkit.block.data.type.Chest;
@@ -45,6 +48,7 @@ import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkPopulateEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.BlockInventoryHolder;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.loot.LootContext;
 import org.bukkit.loot.LootTable;
@@ -103,27 +107,31 @@ public final class LootListener implements Listener {
 
         Block block = event.getClickedBlock();
         BlockState state = block.getState();
-        if (!(state instanceof Container) || !(state instanceof Lootable lootable)) {
+        if (!(state instanceof Container) || !(state instanceof Lootable)) {
             return;
         }
 
-        LootTable lootTable = lootable.getLootTable();
-        if (lootTable == null) {
-            cleanupLostLootContainer(block);
-            return;
+        ChestResolution resolution = resolveChest(block);
+        switch (resolution.type()) {
+            case SINGLE -> {
+                event.setCancelled(true);
+                openSingleContainer(event.getPlayer(), resolution.lootParts().getFirst());
+            }
+            case NATURAL_DOUBLE -> {
+                event.setCancelled(true);
+                openNaturalDoubleChest(event.getPlayer(), resolution.lootParts());
+            }
+            case MIXED_DOUBLE -> {
+                separateChestPair(resolution.blocks().get(0), resolution.blocks().get(1));
+
+                LootContainerPart clickedPart = resolution.lootParts().getFirst();
+                if (clickedPart.block().equals(block)) {
+                    event.setCancelled(true);
+                    openSingleContainer(event.getPlayer(), resolveSinglePart(block));
+                }
+            }
+            case UNMANAGED -> cleanupLostLootContainer(block);
         }
-
-        tagLootContainer(state, lootTable);
-        separateManagedChest(block);
-
-        // Splitting changes the physical container view, so never use the pre-split snapshot.
-        state = block.getState();
-        if (!(state instanceof Container singleContainer)) {
-            return;
-        }
-
-        event.setCancelled(true);
-        openPerPlayerContainer(event.getPlayer(), block, singleContainer, lootTable);
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -192,20 +200,6 @@ public final class LootListener implements Listener {
                 && state instanceof Lootable lootable
                 && lootable.getLootTable() != null) {
                 tagLootContainer(state, lootable.getLootTable());
-            }
-        }
-    }
-
-    private static void separateManagedChest(final Block managedBlock) {
-        if (!(managedBlock.getBlockData() instanceof Chest)) {
-            return;
-        }
-
-        for (BlockFace face : HORIZONTAL_FACES) {
-            Block adjacentBlock = managedBlock.getRelative(face);
-            if (adjacentBlock.getType() == managedBlock.getType()
-                && adjacentBlock.getBlockData() instanceof Chest) {
-                separateChestPair(managedBlock, adjacentBlock);
             }
         }
     }
@@ -350,7 +344,9 @@ public final class LootListener implements Listener {
         }
 
         // Stop hoppers before they receive the inventory; moving items can consume vanilla loot tables.
-        if (isManagedNaturalLootContainer(event.getSearchBlock().getState())) {
+        Inventory inventory = event.getInventory();
+        if ((inventory != null && isProtectedLootContainerInventory(inventory))
+            || isManagedNaturalLootContainer(event.getSearchBlock().getState())) {
             event.setInventory(null);
         }
     }
@@ -435,45 +431,97 @@ public final class LootListener implements Listener {
             return;
         }
 
-        this.storage.setContainerInventory(
-            holder.containerKey(),
-            holder.playerId(),
-            event.getInventory().getContents()
-        );
-        closeContainerLid(holder.containerKey(), holder.containerLocation());
+        ItemStack[] combinedContents = event.getInventory().getContents();
+        for (InventoryPart part : holder.parts()) {
+            ItemStack[] contents = Arrays.copyOfRange(
+                combinedContents,
+                part.offset(),
+                part.offset() + part.size()
+            );
+            this.storage.setContainerInventory(part.containerKey(), holder.playerId(), contents);
+            closeContainerLid(part.containerKey(), part.location());
+        }
     }
 
-    private void openPerPlayerContainer(
+    private void openSingleContainer(
         final Player player,
-        final Block block,
-        final Container container,
-        final LootTable lootTable
+        final LootContainerPart part
     ) {
-        String containerKey = containerKey(block.getLocation());
+        Block block = part.block();
+        if (!(block.getState() instanceof Container container)) {
+            return;
+        }
+
         int size = container.getInventory().getSize();
         PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
-            containerKey,
             player.getUniqueId(),
-            block.getLocation()
+            List.of(new InventoryPart(part.containerKey(), block.getLocation(), 0, size))
         );
         Component customName = container instanceof Nameable nameable ? nameable.customName() : null;
         Inventory inventory = customName == null
             ? Bukkit.createInventory(holder, size, Component.translatable(containerTitleKey(block.getType(), size)))
             : Bukkit.createInventory(holder, size, customName);
 
-        if (this.storage.hasContainerInventory(containerKey, player.getUniqueId())) {
-            inventory.setContents(this.storage.getContainerInventory(containerKey, player.getUniqueId(), size));
-        } else {
-            lootTable.fillInventory(
-                inventory,
-                new Random(seed(containerKey, player.getUniqueId())),
-                new LootContext.Builder(block.getLocation()).killer(player).build()
-            );
-            this.storage.setContainerInventory(containerKey, player.getUniqueId(), inventory.getContents());
-        }
+        inventory.setContents(loadOrGeneratePart(player, part, size));
 
         player.openInventory(inventory);
-        openContainerLid(containerKey, block.getLocation());
+        openContainerLid(part.containerKey(), block.getLocation());
+    }
+
+    private void openNaturalDoubleChest(final Player player, final List<LootContainerPart> parts) {
+        PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
+            player.getUniqueId(),
+            List.of(
+                new InventoryPart(parts.get(0).containerKey(), parts.get(0).block().getLocation(), 0, 27),
+                new InventoryPart(parts.get(1).containerKey(), parts.get(1).block().getLocation(), 27, 27)
+            )
+        );
+        Component customName = customName(parts.get(0).block());
+        if (customName == null) {
+            customName = customName(parts.get(1).block());
+        }
+        Inventory combined = customName == null
+            ? Bukkit.createInventory(holder, 54, Component.translatable("container.chestDouble"))
+            : Bukkit.createInventory(holder, 54, customName);
+
+        for (int index = 0; index < parts.size(); index++) {
+            ItemStack[] contents = loadOrGeneratePart(player, parts.get(index), 27);
+            int offset = index * 27;
+            for (int slot = 0; slot < contents.length; slot++) {
+                combined.setItem(offset + slot, contents[slot]);
+            }
+        }
+
+        player.openInventory(combined);
+        for (LootContainerPart part : parts) {
+            openContainerLid(part.containerKey(), part.block().getLocation());
+        }
+    }
+
+    private ItemStack[] loadOrGeneratePart(
+        final Player player,
+        final LootContainerPart part,
+        final int size
+    ) {
+        UUID playerId = player.getUniqueId();
+        if (this.storage.hasContainerInventory(part.containerKey(), playerId)) {
+            return this.storage.getContainerInventory(part.containerKey(), playerId, size);
+        }
+
+        Inventory generated = Bukkit.createInventory(null, size);
+        part.lootTable().fillInventory(
+            generated,
+            new Random(seed(part.containerKey(), playerId)),
+            new LootContext.Builder(part.block().getLocation()).killer(player).build()
+        );
+        ItemStack[] contents = generated.getContents();
+        this.storage.setContainerInventory(part.containerKey(), playerId, contents);
+        return contents;
+    }
+
+    private static Component customName(final Block block) {
+        BlockState state = block.getState();
+        return state instanceof Nameable nameable ? nameable.customName() : null;
     }
 
     private void openContainerLid(final String containerKey, final Location location) {
@@ -532,29 +580,52 @@ public final class LootListener implements Listener {
     }
 
     private boolean isProtectedLootContainerInventory(final Inventory inventory) {
-        if (!(inventory.getHolder(false) instanceof BlockInventoryHolder holder)) {
+        InventoryHolder holder = inventory.getHolder(false);
+        if (holder instanceof DoubleChest doubleChest) {
+            boolean leftProtected = isProtectedLootContainerHolder(doubleChest.getLeftSide());
+            boolean rightProtected = isProtectedLootContainerHolder(doubleChest.getRightSide());
+            return leftProtected || rightProtected;
+        }
+
+        return isProtectedLootContainerHolder(holder);
+    }
+
+    private boolean isProtectedLootContainerHolder(final InventoryHolder holder) {
+        if (!(holder instanceof BlockInventoryHolder blockHolder)) {
             return false;
         }
 
-        BlockState state = holder.getBlock().getState();
+        BlockState state = blockHolder.getBlock().getState();
         if (state instanceof Lootable lootable && lootable.getLootTable() != null) {
             tagLootContainer(state, lootable.getLootTable());
             return true;
         }
 
-        if (hasManagedLootContainerTag(state) || this.storage.hasContainerData(containerKey(holder.getBlock().getLocation()))) {
-            cleanupLostLootContainer(holder.getBlock());
+        if (hasManagedLootContainerTag(state)
+            || this.storage.hasContainerData(containerKey(blockHolder.getBlock().getLocation()))) {
+            cleanupLostLootContainer(blockHolder.getBlock());
             return true;
         }
         return false;
     }
 
     private void cleanupLostLootContainerData(final Inventory inventory) {
-        if (!(inventory.getHolder(false) instanceof BlockInventoryHolder holder)) {
+        InventoryHolder holder = inventory.getHolder(false);
+        if (holder instanceof DoubleChest doubleChest) {
+            cleanupLostLootContainerData(doubleChest.getLeftSide());
+            cleanupLostLootContainerData(doubleChest.getRightSide());
             return;
         }
 
-        Block block = holder.getBlock();
+        cleanupLostLootContainerData(holder);
+    }
+
+    private void cleanupLostLootContainerData(final InventoryHolder holder) {
+        if (!(holder instanceof BlockInventoryHolder blockHolder)) {
+            return;
+        }
+
+        Block block = blockHolder.getBlock();
         BlockState state = block.getState();
         if (state instanceof Lootable lootable && lootable.getLootTable() != null) {
             tagLootContainer(state, lootable.getLootTable());
@@ -562,6 +633,68 @@ public final class LootListener implements Listener {
         }
 
         cleanupLostLootContainer(block);
+    }
+
+    private ChestResolution resolveChest(final Block clickedBlock) {
+        BlockState clickedState = clickedBlock.getState();
+        LootContainerPart clickedPart = resolveLootContainerPart(clickedBlock);
+        if (!(clickedState.getBlockData() instanceof Chest chestData)
+            || chestData.getType() == Chest.Type.SINGLE) {
+            return clickedPart == null
+                ? new ChestResolution(ChestResolutionType.UNMANAGED, List.of(clickedBlock), List.of())
+                : new ChestResolution(ChestResolutionType.SINGLE, List.of(clickedBlock), List.of(clickedPart));
+        }
+
+        if (!(clickedState instanceof Container container)
+            || !(container.getInventory().getHolder(false) instanceof DoubleChest doubleChest)
+            || !(doubleChest.getLeftSide() instanceof BlockInventoryHolder leftHolder)
+            || !(doubleChest.getRightSide() instanceof BlockInventoryHolder rightHolder)) {
+            return new ChestResolution(ChestResolutionType.UNMANAGED, List.of(clickedBlock), List.of());
+        }
+
+        Block leftBlock = leftHolder.getBlock();
+        Block rightBlock = rightHolder.getBlock();
+        LootContainerPart leftPart = resolveLootContainerPart(leftBlock);
+        LootContainerPart rightPart = resolveLootContainerPart(rightBlock);
+        List<Block> blocks = List.of(leftBlock, rightBlock);
+
+        if (leftPart != null && rightPart != null) {
+            return new ChestResolution(
+                ChestResolutionType.NATURAL_DOUBLE,
+                blocks,
+                List.of(leftPart, rightPart)
+            );
+        }
+        if (leftPart != null || rightPart != null) {
+            return new ChestResolution(
+                ChestResolutionType.MIXED_DOUBLE,
+                blocks,
+                List.of(leftPart != null ? leftPart : rightPart)
+            );
+        }
+        return new ChestResolution(ChestResolutionType.UNMANAGED, blocks, List.of());
+    }
+
+    private LootContainerPart resolveSinglePart(final Block block) {
+        LootContainerPart part = resolveLootContainerPart(block);
+        if (part == null) {
+            throw new IllegalStateException("Managed loot chest lost its loot table while being separated.");
+        }
+        return part;
+    }
+
+    private LootContainerPart resolveLootContainerPart(final Block block) {
+        BlockState state = block.getState();
+        if (!(state instanceof Container) || !(state instanceof Lootable lootable)) {
+            return null;
+        }
+
+        LootTable lootTable = lootable.getLootTable();
+        if (lootTable == null) {
+            return null;
+        }
+        tagLootContainer(state, lootTable);
+        return new LootContainerPart(block, lootTable, containerKey(block.getLocation()));
     }
 
     private boolean isManagedNaturalLootContainer(final BlockState state) {
@@ -679,6 +812,27 @@ public final class LootListener implements Listener {
                 RED_SHULKER_BOX, BLACK_SHULKER_BOX -> "container.shulkerBox";
             default -> "container.generic_9x" + Math.max(1, size / 9);
         };
+    }
+
+    private enum ChestResolutionType {
+        SINGLE,
+        NATURAL_DOUBLE,
+        MIXED_DOUBLE,
+        UNMANAGED
+    }
+
+    private record ChestResolution(
+        ChestResolutionType type,
+        List<Block> blocks,
+        List<LootContainerPart> lootParts
+    ) {
+    }
+
+    private record LootContainerPart(
+        Block block,
+        LootTable lootTable,
+        String containerKey
+    ) {
     }
 }
 
