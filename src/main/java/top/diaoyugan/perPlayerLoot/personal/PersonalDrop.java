@@ -14,6 +14,21 @@ public record PersonalDrop(
     PersonalDropState state
 ) {
 
+    public PersonalDrop {
+        itemStack = itemStack.clone();
+        spawnLocation = spawnLocation.clone();
+    }
+
+    @Override
+    public ItemStack itemStack() {
+        return this.itemStack.clone();
+    }
+
+    @Override
+    public Location spawnLocation() {
+        return this.spawnLocation.clone();
+    }
+
     PersonalDrop withEntityId(final UUID newEntityId) {
         return new PersonalDrop(
             newEntityId,

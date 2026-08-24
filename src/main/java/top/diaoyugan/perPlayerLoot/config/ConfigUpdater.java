@@ -56,6 +56,7 @@ public final class ConfigUpdater {
             String path = parentPath.isEmpty() ? key : parentPath + "." + key;
             if (defaults.isConfigurationSection(key)) {
                 ConfigurationSection child = target.createSection(key);
+                copyComments(defaults, target, key);
                 copyKnownKeys(
                     defaults.getConfigurationSection(key),
                     current == null ? null : current.getConfigurationSection(key),
@@ -69,7 +70,17 @@ public final class ConfigUpdater {
                 ? current.get(key)
                 : defaults.get(key);
             target.set(key, value);
+            copyComments(defaults, target, key);
         }
+    }
+
+    private static void copyComments(
+        final ConfigurationSection source,
+        final ConfigurationSection target,
+        final String key
+    ) {
+        target.setComments(key, source.getComments(key));
+        target.setInlineComments(key, source.getInlineComments(key));
     }
 }
 

@@ -26,6 +26,8 @@ public final class Messages {
     public static final String PERSONAL_DROPS_DISABLED = "message.perplayerloot.personal_drops_disabled";
     public static final String NO_CONTAINER_DESTROY_PERMISSION = "message.perplayerloot.no_container_destroy_permission";
     public static final String NO_FRAME_DESTROY_PERMISSION = "message.perplayerloot.no_frame_destroy_permission";
+    public static final String BRUSHABLE_ALREADY_CLAIMED = "message.perplayerloot.brushable_already_claimed";
+    public static final String NO_BRUSHABLE_DESTROY_PERMISSION = "message.perplayerloot.no_brushable_destroy_permission";
     public static final String RELOAD_SUCCESS = "message.perplayerloot.reload_success";
     public static final String RELOAD_USAGE = "message.perplayerloot.reload_usage";
 

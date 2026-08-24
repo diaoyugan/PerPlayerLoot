@@ -10,11 +10,11 @@ record InventoryPart(
 ) {
 
     InventoryPart {
-        location = location.clone();
+        location = location == null ? null : location.clone();
     }
 
     @Override
     public Location location() {
-        return this.location.clone();
+        return this.location == null ? null : this.location.clone();
     }
 }

@@ -11,6 +11,13 @@ repositories {
 dependencies {
     compileOnly(libs.paper.api)
     compileOnly(libs.protocollib)
+
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.paper.api)
+    testImplementation(libs.sqlite.jdbc)
+    testImplementation(libs.mockito.core)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }
 
 java {
@@ -28,5 +35,10 @@ tasks {
         filesMatching("paper-plugin.yml") {
             expand(props)
         }
+    }
+
+    test {
+        useJUnitPlatform()
+        jvmArgs("--enable-native-access=ALL-UNNAMED")
     }
 }

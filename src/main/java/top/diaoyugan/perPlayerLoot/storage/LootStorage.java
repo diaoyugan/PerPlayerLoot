@@ -1,14 +1,12 @@
 package top.diaoyugan.perPlayerLoot.storage;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.io.IOException;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -23,7 +21,6 @@ import org.bukkit.World;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.util.io.BukkitObjectInputStream;
 import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
 import top.diaoyugan.perPlayerLoot.personal.PersonalDrop;
 import top.diaoyugan.perPlayerLoot.personal.PersonalDropState;
@@ -31,12 +28,13 @@ import top.diaoyugan.perPlayerLoot.personal.PersonalDropState;
 public final class LootStorage {
 
     private final PerPlayerLoot plugin;
-    private final File databaseFile;
-    private Connection connection;
+    private final SqliteDatabase database;
+    private final ClaimRepository claims;
 
     public LootStorage(final PerPlayerLoot plugin) {
         this.plugin = plugin;
-        this.databaseFile = new File(plugin.getDataFolder(), "loot-data.sqlite");
+        this.database = new SqliteDatabase(new File(plugin.getDataFolder(), "loot-data.sqlite"), plugin.getLogger());
+        this.claims = new ClaimRepository(this.database);
     }
 
     public void load() {
@@ -45,32 +43,19 @@ public final class LootStorage {
         }
 
         try {
-            this.connection = DriverManager.getConnection("jdbc:sqlite:" + this.databaseFile.getAbsolutePath());
-            try (Statement statement = this.connection.createStatement()) {
-                applyDatabasePassword(statement);
-                statement.execute("PRAGMA journal_mode=WAL");
-                statement.execute("PRAGMA synchronous=NORMAL");
-            }
+            this.database.open(this.plugin.settings().database().password());
             createTables();
-            migrateYamlIfNeeded();
+            new LegacyYamlMigrator(this.plugin, this).migrateIfNeeded();
             removeTerminalPersonalDrops();
+            this.claims.loadIndexes();
         } catch (SQLException exception) {
             throw new IllegalStateException("Could not open SQLite loot storage.", exception);
         }
     }
 
     public void save() {
-        if (this.connection == null) {
-            return;
-        }
-
-        try {
-            this.connection.close();
-        } catch (SQLException exception) {
-            this.plugin.getLogger().log(Level.SEVERE, "Could not close SQLite loot storage.", exception);
-        } finally {
-            this.connection = null;
-        }
+        this.claims.close();
+        this.database.close();
     }
 
     public boolean hasContainerInventory(final String containerKey, final UUID playerId) {
@@ -96,7 +81,7 @@ public final class LootStorage {
                     return new ItemStack[size];
                 }
 
-                ItemStack[] storedContents = deserializeItems(resultSet.getBytes("contents"));
+                ItemStack[] storedContents = ItemStackCodec.deserializeItems(resultSet.getBytes("contents"));
                 ItemStack[] contents = new ItemStack[size];
                 System.arraycopy(storedContents, 0, contents, 0, Math.min(storedContents.length, size));
                 return contents;
@@ -107,12 +92,14 @@ public final class LootStorage {
     }
 
     public void setContainerInventory(final String containerKey, final UUID playerId, final ItemStack[] contents) {
-        StoredContainer storedContainer = StoredContainer.fromKey(containerKey);
+        UUID entityId = entityIdFromContainerKey(containerKey);
+        StoredContainer storedContainer = entityId == null ? StoredContainer.fromKey(containerKey) : null;
         String sql = """
             INSERT INTO container_inventories(
-                container_key, player_uuid, contents, world_uuid, chunk_x, chunk_z, block_x, block_y, block_z
+                container_key, player_uuid, contents, world_uuid, chunk_x, chunk_z, block_x, block_y, block_z,
+                entity_uuid
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(container_key, player_uuid) DO UPDATE SET
                 contents = excluded.contents,
                 world_uuid = excluded.world_uuid,
@@ -120,18 +107,30 @@ public final class LootStorage {
                 chunk_z = excluded.chunk_z,
                 block_x = excluded.block_x,
                 block_y = excluded.block_y,
-                block_z = excluded.block_z
+                block_z = excluded.block_z,
+                entity_uuid = excluded.entity_uuid
             """;
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, containerKey);
             statement.setString(2, playerId.toString());
-            statement.setBytes(3, serializeItems(contents));
-            statement.setString(4, storedContainer.worldId().toString());
-            statement.setInt(5, storedContainer.chunkX());
-            statement.setInt(6, storedContainer.chunkZ());
-            statement.setInt(7, storedContainer.blockX());
-            statement.setInt(8, storedContainer.blockY());
-            statement.setInt(9, storedContainer.blockZ());
+            statement.setBytes(3, ItemStackCodec.serializeItems(contents));
+            if (storedContainer == null) {
+                statement.setNull(4, Types.VARCHAR);
+                statement.setNull(5, Types.INTEGER);
+                statement.setNull(6, Types.INTEGER);
+                statement.setNull(7, Types.INTEGER);
+                statement.setNull(8, Types.INTEGER);
+                statement.setNull(9, Types.INTEGER);
+                statement.setString(10, entityId.toString());
+            } else {
+                statement.setString(4, storedContainer.worldId().toString());
+                statement.setInt(5, storedContainer.chunkX());
+                statement.setInt(6, storedContainer.chunkZ());
+                statement.setInt(7, storedContainer.blockX());
+                statement.setInt(8, storedContainer.blockY());
+                statement.setInt(9, storedContainer.blockZ());
+                statement.setNull(10, Types.VARCHAR);
+            }
             statement.executeUpdate();
         } catch (SQLException exception) {
             throw storageException(exception);
@@ -163,7 +162,7 @@ public final class LootStorage {
         String sql = """
             SELECT DISTINCT container_key, world_uuid, chunk_x, chunk_z, block_x, block_y, block_z
             FROM container_inventories
-            WHERE world_uuid = ? AND chunk_x = ? AND chunk_z = ?
+            WHERE entity_uuid IS NULL AND world_uuid = ? AND chunk_x = ? AND chunk_z = ?
             """;
         try (PreparedStatement statement = connection().prepareStatement(sql)) {
             statement.setString(1, worldId.toString());
@@ -181,6 +180,7 @@ public final class LootStorage {
         String sql = """
             SELECT DISTINCT container_key, world_uuid, chunk_x, chunk_z, block_x, block_y, block_z
             FROM container_inventories
+            WHERE entity_uuid IS NULL
             """;
         try (PreparedStatement statement = connection().prepareStatement(sql);
              ResultSet resultSet = statement.executeQuery()) {
@@ -191,30 +191,87 @@ public final class LootStorage {
     }
 
     public boolean hasClaimedFrame(final UUID frameId, final UUID playerId) {
-        String sql = "SELECT 1 FROM frame_claims WHERE frame_uuid = ? AND player_uuid = ?";
-        try (PreparedStatement statement = connection().prepareStatement(sql)) {
-            statement.setString(1, frameId.toString());
-            statement.setString(2, playerId.toString());
-            try (ResultSet resultSet = statement.executeQuery()) {
-                return resultSet.next();
-            }
+        return this.claims.hasFrame(frameId, playerId);
+    }
+
+    public void setClaimedFrame(final UUID frameId, final UUID playerId) {
+        try {
+            this.claims.setFrame(frameId, playerId);
         } catch (SQLException exception) {
             throw storageException(exception);
         }
     }
 
-    public void setClaimedFrame(final UUID frameId, final UUID playerId) {
-        String sql = "INSERT OR IGNORE INTO frame_claims(frame_uuid, player_uuid) VALUES(?, ?)";
-        try (PreparedStatement statement = connection().prepareStatement(sql)) {
-            statement.setString(1, frameId.toString());
-            statement.setString(2, playerId.toString());
-            statement.executeUpdate();
+    /** Atomically reserves a frame claim and its recoverable drop. */
+    public boolean claimFrameWithDrop(final UUID frameId, final UUID playerId, final PersonalDrop drop) {
+        boolean claimed = this.database.transaction(connection -> {
+            if (!this.claims.insertFrame(connection, frameId, playerId)) return false;
+            savePersonalDrop(connection, drop);
+            return true;
+        });
+        if (claimed) this.claims.recordFrame(frameId, playerId);
+        return claimed;
+    }
+
+    public boolean hasClaimedBrushable(final String blockKey, final UUID playerId) {
+        return this.claims.hasBrushable(blockKey, playerId);
+    }
+
+    public void setClaimedBrushable(final String blockKey, final UUID playerId) {
+        try {
+            this.claims.setBrushable(blockKey, playerId);
+        } catch (SQLException exception) {
+            throw storageException(exception);
+        }
+    }
+
+    /** Atomically reserves an archaeology claim and all of its recoverable drops. */
+    public boolean claimBrushableWithDrops(
+        final String blockKey,
+        final UUID playerId,
+        final List<PersonalDrop> drops
+    ) {
+        boolean claimed = this.database.transaction(connection -> {
+            if (!this.claims.insertBrushable(connection, blockKey, playerId)) return false;
+            for (PersonalDrop drop : drops) savePersonalDrop(connection, drop);
+            return true;
+        });
+        if (claimed) this.claims.recordBrushable(blockKey, playerId);
+        return claimed;
+    }
+
+    public void removeBrushableClaims(final String blockKey) {
+        try {
+            this.claims.removeBrushable(blockKey);
         } catch (SQLException exception) {
             throw storageException(exception);
         }
     }
 
     public void savePersonalDrop(final PersonalDrop drop) {
+        try {
+            savePersonalDrop(connection(), drop);
+        } catch (SQLException exception) {
+            throw storageException(exception);
+        }
+    }
+
+    /** Replaces a pending/recovered row with the UUID assigned to the spawned entity atomically. */
+    public void replacePersonalDrop(final UUID previousDropId, final PersonalDrop activeDrop) {
+        this.database.transaction(database -> {
+            savePersonalDrop(database, activeDrop);
+            try (PreparedStatement statement = database.prepareStatement(
+                "DELETE FROM personal_drops WHERE entity_uuid = ? AND entity_uuid <> ?"
+            )) {
+                statement.setString(1, previousDropId.toString());
+                statement.setString(2, activeDrop.entityId().toString());
+                statement.executeUpdate();
+            }
+            return null;
+        });
+    }
+
+    private void savePersonalDrop(final Connection database, final PersonalDrop drop) throws SQLException {
         String sql = """
             INSERT INTO personal_drops(
                 entity_uuid, owner_uuid, source_uuid, item, world_uuid, x, y, z, yaw, pitch, created, state
@@ -234,11 +291,11 @@ public final class LootStorage {
             """;
         Location location = drop.spawnLocation();
         World world = location.getWorld();
-        try (PreparedStatement statement = connection().prepareStatement(sql)) {
+        try (PreparedStatement statement = database.prepareStatement(sql)) {
             statement.setString(1, drop.entityId().toString());
             statement.setString(2, drop.ownerId().toString());
             statement.setString(3, drop.lootSourceId().toString());
-            statement.setBytes(4, serializeItem(drop.itemStack()));
+            statement.setBytes(4, ItemStackCodec.serializeItem(drop.itemStack()));
             statement.setString(5, world == null ? null : world.getUID().toString());
             statement.setDouble(6, location.getX());
             statement.setDouble(7, location.getY());
@@ -248,8 +305,6 @@ public final class LootStorage {
             statement.setLong(11, drop.creationTimestamp());
             statement.setString(12, drop.state().name());
             statement.executeUpdate();
-        } catch (SQLException exception) {
-            throw storageException(exception);
         }
     }
 
@@ -345,19 +400,7 @@ public final class LootStorage {
     }
 
     public Set<UUID> getClaimedFrameIds(final UUID playerId) {
-        Set<UUID> frameIds = new HashSet<>();
-        String sql = "SELECT frame_uuid FROM frame_claims WHERE player_uuid = ?";
-        try (PreparedStatement statement = connection().prepareStatement(sql)) {
-            statement.setString(1, playerId.toString());
-            try (ResultSet resultSet = statement.executeQuery()) {
-                while (resultSet.next()) {
-                    frameIds.add(UUID.fromString(resultSet.getString("frame_uuid")));
-                }
-            }
-            return frameIds;
-        } catch (SQLException exception) {
-            throw storageException(exception);
-        }
+        return this.claims.frameIds(playerId);
     }
 
     private void createTables() throws SQLException {
@@ -373,10 +416,15 @@ public final class LootStorage {
                     block_x INTEGER,
                     block_y INTEGER,
                     block_z INTEGER,
+                    entity_uuid TEXT,
                     PRIMARY KEY(container_key, player_uuid)
                 )
                 """);
             addContainerLocationColumns(statement);
+            statement.execute("""
+                CREATE INDEX IF NOT EXISTS idx_container_inventories_entity
+                ON container_inventories(entity_uuid)
+                """);
             statement.execute("""
                 CREATE INDEX IF NOT EXISTS idx_container_inventories_chunk
                 ON container_inventories(world_uuid, chunk_x, chunk_z)
@@ -386,6 +434,13 @@ public final class LootStorage {
                     frame_uuid TEXT NOT NULL,
                     player_uuid TEXT NOT NULL,
                     PRIMARY KEY(frame_uuid, player_uuid)
+                )
+                """);
+            statement.execute("""
+                CREATE TABLE IF NOT EXISTS brushable_claims (
+                    block_key TEXT NOT NULL,
+                    player_uuid TEXT NOT NULL,
+                    PRIMARY KEY(block_key, player_uuid)
                 )
                 """);
             statement.execute("""
@@ -428,6 +483,7 @@ public final class LootStorage {
         addColumnIfMissing(statement, columns, "block_x", "INTEGER");
         addColumnIfMissing(statement, columns, "block_y", "INTEGER");
         addColumnIfMissing(statement, columns, "block_z", "INTEGER");
+        addColumnIfMissing(statement, columns, "entity_uuid", "TEXT");
         backfillContainerLocationColumns();
     }
 
@@ -460,12 +516,13 @@ public final class LootStorage {
              ResultSet resultSet = statement.executeQuery("""
                  SELECT DISTINCT container_key
                  FROM container_inventories
-                 WHERE world_uuid IS NULL
+                 WHERE entity_uuid IS NULL
+                   AND (world_uuid IS NULL
                     OR chunk_x IS NULL
                     OR chunk_z IS NULL
                     OR block_x IS NULL
                     OR block_y IS NULL
-                    OR block_z IS NULL
+                    OR block_z IS NULL)
                  """)) {
             while (resultSet.next()) {
                 String containerKey = resultSet.getString("container_key");
@@ -497,33 +554,7 @@ public final class LootStorage {
         }
     }
 
-    private void applyDatabasePassword(final Statement statement) throws SQLException {
-        String password = this.plugin.getConfig().getString("database.password", "");
-        if (password == null || password.isBlank()) {
-            return;
-        }
-
-        statement.execute("PRAGMA key = '" + password.replace("'", "''") + "'");
-    }
-
-    private void migrateYamlIfNeeded() {
-        File yamlFile = new File(this.plugin.getDataFolder(), "loot-data.yml");
-        File migratedMarker = new File(this.plugin.getDataFolder(), "loot-data.yml.migrated");
-        if (!yamlFile.exists() || migratedMarker.exists() || hasAnyData()) {
-            return;
-        }
-
-        FileConfiguration yaml = YamlConfiguration.loadConfiguration(yamlFile);
-        migrateContainers(yaml);
-        migrateFrameClaims(yaml);
-        migratePersonalDrops(yaml);
-
-        if (!yamlFile.renameTo(migratedMarker)) {
-            this.plugin.getLogger().warning("Migrated loot-data.yml to SQLite, but could not rename the old file.");
-        }
-    }
-
-    private boolean hasAnyData() {
+    boolean hasAnyData() {
         try (Statement statement = connection().createStatement();
              ResultSet resultSet = statement.executeQuery("""
                  SELECT
@@ -534,75 +565,6 @@ public final class LootStorage {
             return resultSet.next() && resultSet.getLong("total") > 0;
         } catch (SQLException exception) {
             throw storageException(exception);
-        }
-    }
-
-    private void migrateContainers(final FileConfiguration yaml) {
-        if (!yaml.isConfigurationSection("containers")) {
-            return;
-        }
-
-        for (String escapedContainerKey : yaml.getConfigurationSection("containers").getKeys(false)) {
-            String containerKey = escapedContainerKey.replace("%2E", ".");
-            String containerPath = "containers." + escapedContainerKey;
-            if (!yaml.isConfigurationSection(containerPath)) {
-                continue;
-            }
-            for (String playerId : yaml.getConfigurationSection(containerPath).getKeys(false)) {
-                List<?> storedItems = yaml.getList(containerPath + "." + playerId + ".contents", List.of());
-                ItemStack[] contents = new ItemStack[storedItems.size()];
-                for (int slot = 0; slot < storedItems.size(); slot++) {
-                    Object storedItem = storedItems.get(slot);
-                    if (storedItem instanceof ItemStack itemStack) {
-                        contents[slot] = itemStack;
-                    }
-                }
-                setContainerInventory(containerKey, UUID.fromString(playerId), contents);
-            }
-        }
-    }
-
-    private void migrateFrameClaims(final FileConfiguration yaml) {
-        if (!yaml.isConfigurationSection("frames")) {
-            return;
-        }
-
-        for (String frameId : yaml.getConfigurationSection("frames").getKeys(false)) {
-            String claimedPath = "frames." + frameId + ".claimed";
-            if (!yaml.isConfigurationSection(claimedPath)) {
-                continue;
-            }
-            UUID frameUuid = UUID.fromString(frameId);
-            for (String playerId : yaml.getConfigurationSection(claimedPath).getKeys(false)) {
-                if (yaml.getBoolean(claimedPath + "." + playerId, false)) {
-                    setClaimedFrame(frameUuid, UUID.fromString(playerId));
-                }
-            }
-        }
-    }
-
-    private void migratePersonalDrops(final FileConfiguration yaml) {
-        if (!yaml.isConfigurationSection("drops")) {
-            return;
-        }
-
-        for (String dropId : yaml.getConfigurationSection("drops").getKeys(false)) {
-            String path = "drops." + dropId;
-            ItemStack itemStack = yaml.getItemStack(path + ".item");
-            Location location = readYamlLocation(yaml, path + ".location");
-            if (itemStack == null || location == null) {
-                continue;
-            }
-            PersonalDrop drop = new PersonalDrop(
-                UUID.fromString(dropId),
-                UUID.fromString(yaml.getString(path + ".owner")),
-                UUID.fromString(yaml.getString(path + ".source")),
-                itemStack,
-                location,
-                yaml.getLong(path + ".created"),
-                PersonalDropState.valueOf(yaml.getString(path + ".state", "RECOVERED"))
-            );
-            savePersonalDrop(drop);
         }
     }
 
@@ -624,74 +586,22 @@ public final class LootStorage {
             UUID.fromString(resultSet.getString("entity_uuid")),
             UUID.fromString(resultSet.getString("owner_uuid")),
             UUID.fromString(resultSet.getString("source_uuid")),
-            deserializeItem(resultSet.getBytes("item")),
+            ItemStackCodec.deserializeItem(resultSet.getBytes("item")),
             location,
             resultSet.getLong("created"),
             PersonalDropState.valueOf(resultSet.getString("state"))
         );
     }
 
-    private static Location readYamlLocation(final FileConfiguration yaml, final String path) {
-        String worldId = yaml.getString(path + ".world");
-        if (worldId == null) {
-            return null;
-        }
-
-        World world = Bukkit.getWorld(UUID.fromString(worldId));
-        if (world == null) {
-            return null;
-        }
-        return new Location(
-            world,
-            yaml.getDouble(path + ".x"),
-            yaml.getDouble(path + ".y"),
-            yaml.getDouble(path + ".z"),
-            (float) yaml.getDouble(path + ".yaw"),
-            (float) yaml.getDouble(path + ".pitch")
-        );
-    }
-
     private Connection connection() {
-        if (this.connection == null) {
-            throw new IllegalStateException("Loot storage is not loaded.");
+        return this.database.connection();
+    }
+
+    private static UUID entityIdFromContainerKey(final String containerKey) {
+        if (!containerKey.startsWith("entity;")) {
+            return null;
         }
-        return this.connection;
-    }
-
-    private static byte[] serializeItems(final ItemStack[] items) {
-        return ItemStack.serializeItemsAsBytes(items);
-    }
-
-    private static ItemStack[] deserializeItems(final byte[] bytes) {
-        try {
-            return ItemStack.deserializeItemsFromBytes(bytes);
-        } catch (RuntimeException exception) {
-            // Older plugin versions stored BukkitObjectOutputStream blobs; keep them readable.
-            return legacyDeserialize(bytes, ItemStack[].class);
-        }
-    }
-
-    private static byte[] serializeItem(final ItemStack item) {
-        return item.serializeAsBytes();
-    }
-
-    private static ItemStack deserializeItem(final byte[] bytes) {
-        try {
-            return ItemStack.deserializeBytes(bytes);
-        } catch (RuntimeException exception) {
-            // Older plugin versions stored BukkitObjectOutputStream blobs; keep them readable.
-            return legacyDeserialize(bytes, ItemStack.class);
-        }
-    }
-
-    @SuppressWarnings("deprecation")
-    private static <T> T legacyDeserialize(final byte[] bytes, final Class<T> type) {
-        try (ByteArrayInputStream byteStream = new ByteArrayInputStream(bytes);
-             BukkitObjectInputStream objectStream = new BukkitObjectInputStream(byteStream)) {
-            return type.cast(objectStream.readObject());
-        } catch (IOException | ClassNotFoundException exception) {
-            throw new IllegalStateException("Could not deserialize loot data.", exception);
-        }
+        return UUID.fromString(containerKey.substring("entity;".length()));
     }
 
     private IllegalStateException storageException(final SQLException exception) {

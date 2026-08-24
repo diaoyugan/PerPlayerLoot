@@ -32,6 +32,10 @@ public final class PerPlayerLootCommand implements BasicCommand {
         }
 
         if (args.length == 2 && args[0].equalsIgnoreCase("cleanup") && args[1].equalsIgnoreCase("containers")) {
+            if (!sender.hasPermission("perplayerloot.admin")) {
+                sender.sendMessage(Component.text("You do not have permission to clean up stored container data."));
+                return;
+            }
             int removed = this.lootListener.cleanupOrphanContainerDataForLoadedChunks();
             sender.sendMessage(Component.text("Removed " + removed + " orphaned loot container storage entr"
                 + (removed == 1 ? "y." : "ies.")));
@@ -44,11 +48,15 @@ public final class PerPlayerLootCommand implements BasicCommand {
     @Override
     public @NotNull Collection<String> suggest(final @NotNull CommandSourceStack source, final @NotNull String @NonNull [] args) {
         if (args.length == 1) {
-            return List.of("reload", "cleanup").stream()
+            List<String> suggestions = source.getSender().hasPermission("perplayerloot.admin")
+                ? List.of("reload", "cleanup")
+                : List.of("reload");
+            return suggestions.stream()
                 .filter(suggestion -> suggestion.startsWith(args[0].toLowerCase()))
                 .toList();
         }
-        if (args.length == 2 && args[0].equalsIgnoreCase("cleanup") && "containers".startsWith(args[1].toLowerCase())) {
+        if (args.length == 2 && source.getSender().hasPermission("perplayerloot.admin")
+            && args[0].equalsIgnoreCase("cleanup") && "containers".startsWith(args[1].toLowerCase())) {
             return List.of("containers");
         }
         return List.of();
@@ -56,7 +64,7 @@ public final class PerPlayerLootCommand implements BasicCommand {
 
     @Override
     public @NotNull String permission() {
-        return "perplayerloot.admin";
+        return "perplayerloot.reload";
     }
 }
 

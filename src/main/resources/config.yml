@@ -1,17 +1,129 @@
+# PerPlayerLoot configuration file.
+# Every switch accepts only true (enabled) or false (disabled).
+# Reload command: /perplayerloot reload
+
+# Configuration schema version. Managed by the plugin; do not edit manually.
 config-version: 1
 
+# ==================== Natural loot containers ====================
+# Applies to chests, trapped chests, barrels, chest minecarts, and other containers with a vanilla loot table.
+
+# Whether natural loot containers are protected from destruction.
+# true: Enable protection and use allow-destroy-natural-loot-containers plus its permission.
+# false: Disable this protection completely. Players and environmental damage may destroy containers;
+#        the related allow-* option and permission are ignored.
+#        Destruction permanently deletes the corresponding per-player inventory data.
+protect-natural-loot-containers-from-destruction: true
+
+# Used only when the destruction protection above is true.
+# true: Every player may destroy natural loot containers, and explosions/environmental damage may destroy them.
+# false: Only players with perplayerloot.destroy.containers may destroy them.
+#        Explosions and environmental damage are blocked regardless of player permissions.
 allow-destroy-natural-loot-containers: false
+
+# Whether players are prevented from joining a placed chest to a natural loot chest.
+# true: Enable merge protection and use allow-merge-natural-loot-containers plus its permission.
+# false: Disable this protection completely. Every player may merge chests;
+#        the related allow-* option and permission are ignored.
+#        Opening a mixed double chest uses the real inventory, may consume its vanilla loot table,
+#        and clears personal data that is no longer valid.
+protect-natural-loot-containers-from-merging: true
+
+# Used only when the merge protection above is true.
+# true: Every player may place a chest so that it joins a natural loot chest.
+# false: Only players with perplayerloot.merge.containers may create the join.
+# To preserve per-player inventories, interacting with the managed side still separates a mixed pair into single chests.
 allow-merge-natural-loot-containers: false
-allow-destroy-natural-loot-frames: false
-allow-sneak-destroy-natural-loot-frames: false
+
+# Whether hoppers and other containers are prevented from transferring items to or from natural loot containers.
+# true: Block transfers so the real inventory cannot consume its vanilla loot table. Recommended.
+# false: Allow transfers. Accessing the real inventory may remove it from personal management and clear stored personal data.
 protect-natural-loot-containers-from-hoppers: true
 
+# ==================== Natural loot item frames ====================
+
+# Whether natural item frames containing configured loot are protected from destruction.
+# true: Enable protection and use the two allow-* options and permission below.
+# false: Disable this protection completely. Players and environmental damage may destroy the real frame;
+#        the two allow-* options and permission below are ignored.
+#        A player attack destroys the real frame instead of claiming a private personal drop.
+protect-natural-loot-frames-from-destruction: true
+
+# Used only when item-frame destruction protection is true.
+# true: Every player may destroy the natural loot frame without sneaking, and environmental damage is allowed;
+#       personal claiming is not triggered.
+# false: A normal attack claims personal loot; the next option controls sneaking destruction.
+allow-destroy-natural-loot-frames: false
+
+# Used only when frame protection is true and the previous option is false.
+# true: Every player may destroy the real frame while sneaking.
+# false: Only sneaking players with perplayerloot.destroy.frames may destroy it.
+allow-sneak-destroy-natural-loot-frames: false
+
+# ==================== Suspicious sand and suspicious gravel ====================
+
+# Whether natural suspicious blocks are protected from direct breaking, explosions, and other entity changes.
+# true: Enable protection and use the two allow-* options and permission below.
+# false: Disable this protection completely. Players and environmental effects may remove the block;
+#        the two allow-* options and permission below are ignored.
+#        Normal brushing remains per-player, and the block still keeps its unbrushed appearance.
+protect-natural-loot-brushables-from-destruction: true
+
+# Used only when suspicious-block destruction protection is true.
+# true: Every player may directly destroy natural suspicious blocks without sneaking, and explosions/environmental
+#       changes may remove them; claims at that location are cleared.
+# false: Direct breaking is blocked for ordinary players. Players with perplayerloot.destroy.brushables may still
+#        destroy these blocks without sneaking; the next option controls sneaking destruction for ordinary players.
+allow-destroy-natural-loot-brushables: false
+
+# Used only when suspicious-block protection is true and the previous option is false.
+# true: Every player may directly destroy natural suspicious blocks while sneaking.
+# false: Sneaking does not bypass protection. The perplayerloot.destroy.brushables permission still allows direct
+#        destruction without requiring the player to sneak.
+allow-sneak-destroy-natural-loot-brushables: false
+
+# ==================== Database ====================
+
+# SQLite database password. It must be a string; keep "" when no password is needed.
+# A full server restart is required after changing it; /perplayerloot reload does not reopen the database.
 database:
   password: ""
 
+# ==================== Personal drops ====================
+# Applies to real item entities created by frames and suspicious blocks that only their owner can see and pick up.
+
+# Number of seconds a drop remains in the world. Use an integer of at least 1; lower values are treated as 1.
 personal-drop-timeout-seconds: 300
+
+# Action after timeout. Accepted values are RECOVER or EXPIRE, case-insensitive.
+# RECOVER: Remove the entity but retain its item data; it is respawned when the player returns. Recommended.
+# EXPIRE: Permanently delete the drop data; the player will not receive that item again.
+# Any unrecognized value is treated as RECOVER.
 personal-drop-timeout-action: RECOVER
 
-# Non player-placed item frames containing these items are treated as per-player loot frames.
+# ==================== Item-frame loot detection ====================
+
+# Items that make a non-player-managed item frame count as a natural loot frame.
+# Enter one Bukkit/vanilla Material name per line, normally uppercase with underscores, such as ELYTRA or DIAMOND.
+# Invalid names are ignored. Player-placed frames and frames later filled by players are never detected as natural loot.
 loot-frame-materials:
   - ELYTRA
+
+# ==================== Advanced logging ====================
+
+# Whether detailed audit logging is enabled.
+# false: Only normal startup, warning, and error messages are emitted. No advanced log files are opened.
+# true: Detailed loot lifecycle events are written to both the server console and rotating files under
+#       plugins/PerPlayerLoot/logs/. Events may include player names and UUIDs, worlds and coordinates,
+#       source block/entity types, loot-table identifiers, item summaries, pickups, recovery, and cleanup.
+#       Detailed logs can grow quickly on busy servers; enable them for diagnostics or auditing as needed.
+advanced-logging:
+  enabled: false
+
+  # Maximum size of each advanced log file in MiB. Use an integer of at least 1.
+  # Values below 1 are treated as 1. Very large values are capped at approximately 2047 MiB.
+  max-file-size-mb: 10
+
+  # Number of rotated advanced log files to retain. Use an integer from 1 to 100; values are clamped to this range.
+  # When the active file reaches the size limit, older files are rotated and the oldest excess file is removed.
+  retained-files: 5

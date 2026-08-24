@@ -25,9 +25,8 @@ import org.bukkit.block.TileState;
 import org.bukkit.block.data.type.Chest;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Entity;
-import org.bukkit.entity.Hanging;
-import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.minecart.StorageMinecart;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -35,10 +34,7 @@ import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
-import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
-import org.bukkit.event.hanging.HangingBreakByEntityEvent;
-import org.bukkit.event.hanging.HangingPlaceEvent;
 import org.bukkit.event.inventory.HopperInventorySearchEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
@@ -57,7 +53,9 @@ import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import net.kyori.adventure.text.Component;
 import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
+import top.diaoyugan.perPlayerLoot.config.ProtectionPolicy;
 import top.diaoyugan.perPlayerLoot.message.Messages;
+import top.diaoyugan.perPlayerLoot.logging.LogDescriptions;
 import top.diaoyugan.perPlayerLoot.personal.PersonalDropManager;
 import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 import top.diaoyugan.perPlayerLoot.storage.LootStorage.StoredContainer;
@@ -74,27 +72,18 @@ public final class LootListener implements Listener {
 
     private final PerPlayerLoot plugin;
     private final LootStorage storage;
-    private final NamespacedKey playerPlacedFrameKey;
-    private final NamespacedKey legacyPlayerPlacedFrameKey;
     private final NamespacedKey lootContainerTableKey;
     private final NamespacedKey lootContainerSeedKey;
-    private final PersonalDropManager personalDropManager;
     private final Map<String, Integer> openContainerCounts = new HashMap<>();
 
     public LootListener(
         final PerPlayerLoot plugin,
-        final LootStorage storage,
-        final NamespacedKey playerPlacedFrameKey,
-        final NamespacedKey legacyPlayerPlacedFrameKey,
-        final PersonalDropManager personalDropManager
+        final LootStorage storage
     ) {
         this.plugin = plugin;
         this.storage = storage;
-        this.playerPlacedFrameKey = playerPlacedFrameKey;
-        this.legacyPlayerPlacedFrameKey = legacyPlayerPlacedFrameKey;
         this.lootContainerTableKey = new NamespacedKey(plugin, "loot_container_table");
         this.lootContainerSeedKey = new NamespacedKey(plugin, "loot_container_seed");
-        this.personalDropManager = personalDropManager;
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
@@ -122,6 +111,14 @@ public final class LootListener implements Listener {
                 openNaturalDoubleChest(event.getPlayer(), resolution.lootParts());
             }
             case MIXED_DOUBLE -> {
+                if (!this.plugin.settings().containers().protectMerging()) {
+                    // With merge protection fully disabled, let vanilla open the real mixed chest.
+                    // It may consume the loot table, so discard virtual data after the interaction finishes.
+                    for (LootContainerPart part : resolution.lootParts()) {
+                        Bukkit.getScheduler().runTask(this.plugin, () -> cleanupLostLootContainer(part.block()));
+                    }
+                    break;
+                }
                 separateChestPair(resolution.blocks().get(0), resolution.blocks().get(1));
 
                 LootContainerPart clickedPart = resolution.lootParts().getFirst();
@@ -134,8 +131,7 @@ public final class LootListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-    public void onBlockBreak(final BlockBreakEvent event) {
+    void protectBlockBreak(final BlockBreakEvent event) {
         BlockState state = event.getBlock().getState();
         String containerKey = containerKey(event.getBlock().getLocation());
         if (!isManagedNaturalLootContainer(state) && !this.storage.hasContainerData(containerKey)) {
@@ -143,16 +139,30 @@ public final class LootListener implements Listener {
         }
 
         if (canDestroyNaturalLootContainer(event.getPlayer())) {
+            closeVirtualContainerViews(containerKey);
             this.storage.removeContainerData(containerKey);
+            this.plugin.logAdvanced(
+                "Natural loot container destroyed: player=%s, block=%s, sourceKey=%s, location=%s; personal data removed",
+                LogDescriptions.player(event.getPlayer()),
+                event.getBlock().getType(),
+                containerKey,
+                LogDescriptions.location(event.getBlock().getLocation())
+            );
             return;
         }
 
         event.setCancelled(true);
         Messages.send(event.getPlayer(), Messages.NO_CONTAINER_DESTROY_PERMISSION);
+        this.plugin.logAdvanced(
+            "Blocked natural loot container destruction: player=%s, block=%s, sourceKey=%s, location=%s",
+            LogDescriptions.player(event.getPlayer()),
+            event.getBlock().getType(),
+            containerKey,
+            LogDescriptions.location(event.getBlock().getLocation())
+        );
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
-    public void onChestPlace(final BlockPlaceEvent event) {
+    void protectChestPlacement(final BlockPlaceEvent event) {
         if (canMergeNaturalLootContainer(event.getPlayer())) {
             return;
         }
@@ -217,115 +227,28 @@ public final class LootListener implements Listener {
         adjacentBlock.setBlockData(adjacentChest, false);
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onBlockExplode(final BlockExplodeEvent event) {
+    void cleanupBlockExplosion(final BlockExplodeEvent event) {
         for (Block block : event.blockList()) {
             cleanupDestroyedLootContainer(block);
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onEntityExplode(final EntityExplodeEvent event) {
+    void cleanupEntityExplosion(final EntityExplodeEvent event) {
         for (Block block : event.blockList()) {
             cleanupDestroyedLootContainer(block);
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onHangingPlace(final HangingPlaceEvent event) {
-        // Player-placed frames must never be treated as natural loot frames.
-        event.getEntity().getPersistentDataContainer().set(
-            this.playerPlacedFrameKey,
-            PersistentDataType.BYTE,
-            TRUE
-        );
+    void protectBlockExplosion(final BlockExplodeEvent event) {
+        protectNaturalLootContainersFromExplosion(event.blockList());
     }
 
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-    public void onClaimedFrameInteract(final PlayerInteractEntityEvent event) {
-        if (!(event.getRightClicked() instanceof ItemFrame itemFrame) || !isNaturalLootFrame(itemFrame)) {
-            return;
-        }
-        if (!this.personalDropManager.hasClaimedOrActiveDrop(event.getPlayer(), itemFrame)) {
-            return;
-        }
-
-        // The client sees claimed frames as empty, but the server still has the real item.
-        // Cancel here so right-clicking cannot rotate it or place a player item into it.
-        event.setCancelled(true);
-        ItemStack handItem = event.getPlayer().getInventory().getItem(event.getHand());
-        if (handItem != null && !handItem.getType().isAir()) {
-            Messages.send(event.getPlayer(), Messages.FRAME_ALREADY_CLAIMED_CANNOT_PLACE);
-        }
+    void protectEntityExplosion(final EntityExplodeEvent event) {
+        protectNaturalLootContainersFromExplosion(event.blockList());
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onPlayerInteractEntity(final PlayerInteractEntityEvent event) {
-        if (!(event.getRightClicked() instanceof ItemFrame itemFrame)) {
-            return;
-        }
-        if (itemFrame.getItem().getType() != Material.AIR) {
-            return;
-        }
-
-        ItemStack handItem = event.getPlayer().getInventory().getItem(event.getHand());
-        if (handItem == null || handItem.getType() == Material.AIR) {
-            return;
-        }
-
-        // Mark frames when a player inserts an item into an existing empty frame.
-        itemFrame.getPersistentDataContainer().set(
-            this.playerPlacedFrameKey,
-            PersistentDataType.BYTE,
-            TRUE
-        );
-    }
-
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-    public void onHangingBreakByEntity(final HangingBreakByEntityEvent event) {
-        Hanging entity = event.getEntity();
-        if (!(entity instanceof ItemFrame itemFrame) || !isNaturalLootFrame(itemFrame)) {
-            return;
-        }
-
-        if (event.getRemover() instanceof Player player) {
-            if (canDestroyNaturalLootFrame(player)) {
-                return;
-            }
-            event.setCancelled(true);
-            Messages.send(player, Messages.NO_FRAME_DESTROY_PERMISSION);
-            return;
-        }
-
-        if (!this.plugin.getConfig().getBoolean("allow-destroy-natural-loot-frames", false)) {
-            event.setCancelled(true);
-        }
-    }
-
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-    public void onFrameDamaged(final EntityDamageByEntityEvent event) {
-        Entity entity = event.getEntity();
-        if (!(entity instanceof ItemFrame itemFrame) || !isNaturalLootFrame(itemFrame)) {
-            return;
-        }
-
-        if (event.getDamager() instanceof Player player) {
-            if (canDestroyNaturalLootFrame(player)) {
-                return;
-            }
-            event.setCancelled(true);
-            this.personalDropManager.createDrop(player, itemFrame);
-            return;
-        }
-
-        if (!this.plugin.getConfig().getBoolean("allow-destroy-natural-loot-frames", false)) {
-            event.setCancelled(true);
-        }
-    }
-
-    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-    public void onInventoryMoveItem(final InventoryMoveItemEvent event) {
-        if (!this.plugin.getConfig().getBoolean("protect-natural-loot-containers-from-hoppers", true)) {
+    void protectInventoryMove(final InventoryMoveItemEvent event) {
+        if (!this.plugin.settings().containers().protectHoppers()) {
             cleanupLostLootContainerData(event.getSource());
             cleanupLostLootContainerData(event.getDestination());
             return;
@@ -337,9 +260,8 @@ public final class LootListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST)
-    public void onHopperInventorySearch(final HopperInventorySearchEvent event) {
-        if (!this.plugin.getConfig().getBoolean("protect-natural-loot-containers-from-hoppers", true)) {
+    void protectHopperSearch(final HopperInventorySearchEvent event) {
+        if (!this.plugin.settings().containers().protectHoppers()) {
             return;
         }
 
@@ -354,6 +276,7 @@ public final class LootListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onChunkLoad(final ChunkLoadEvent event) {
         tagLootContainers(event.getChunk());
+        tagLootMinecarts(event.getChunk());
         cleanupOrphanContainerData(event.getChunk());
     }
 
@@ -361,6 +284,7 @@ public final class LootListener implements Listener {
     public void onChunkPopulate(final ChunkPopulateEvent event) {
         // Generated tile entities can be added after ChunkLoadEvent has already fired.
         tagLootContainers(event.getChunk());
+        tagLootMinecarts(event.getChunk());
     }
 
     public void tagLoadedLootContainers() {
@@ -368,6 +292,7 @@ public final class LootListener implements Listener {
         for (World world : Bukkit.getWorlds()) {
             for (Chunk chunk : world.getLoadedChunks()) {
                 tagLootContainers(chunk);
+                tagLootMinecarts(chunk);
                 cleanupOrphanContainerData(chunk);
             }
         }
@@ -439,8 +364,47 @@ public final class LootListener implements Listener {
                 part.offset() + part.size()
             );
             this.storage.setContainerInventory(part.containerKey(), holder.playerId(), contents);
-            closeContainerLid(part.containerKey(), part.location());
+            if (this.plugin.isAdvancedLoggingEnabled()) {
+                this.plugin.logAdvanced(
+                    "Saved personal loot inventory: player=%s, sourceKey=%s, location=%s, slots=%d, items=[%s]",
+                    LogDescriptions.player(event.getPlayer().getName(), holder.playerId()),
+                    part.containerKey(),
+                    LogDescriptions.location(part.location()),
+                    part.size(),
+                    LogDescriptions.items(contents)
+                );
+            }
+            if (part.location() != null) {
+                closeContainerLid(part.containerKey(), part.location());
+            }
         }
+    }
+
+    void openMinecartContainer(
+        final Player player,
+        final StorageMinecart minecart,
+        final LootTable lootTable
+    ) {
+        String containerKey = entityContainerKey(minecart.getUniqueId());
+        int size = minecart.getInventory().getSize();
+        PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
+            player.getUniqueId(),
+            List.of(new InventoryPart(containerKey, null, 0, size))
+        );
+        Component title = minecart.customName();
+        if (title == null) {
+            title = Component.translatable("entity.minecraft.chest_minecart");
+        }
+        Inventory inventory = Bukkit.createInventory(holder, size, title);
+        inventory.setContents(loadOrGenerate(
+            player,
+            containerKey,
+            minecart.getLocation(),
+            lootTable,
+            size,
+            "CHEST_MINECART entityUuid=" + minecart.getUniqueId()
+        ));
+        player.openInventory(inventory);
     }
 
     private void openSingleContainer(
@@ -503,19 +467,64 @@ public final class LootListener implements Listener {
         final LootContainerPart part,
         final int size
     ) {
+        return loadOrGenerate(
+            player,
+            part.containerKey(),
+            part.block().getLocation(),
+            part.lootTable(),
+            size,
+            part.block().getType().name()
+        );
+    }
+
+    private ItemStack[] loadOrGenerate(
+        final Player player,
+        final String containerKey,
+        final Location location,
+        final LootTable lootTable,
+        final int size,
+        final String sourceDescription
+    ) {
         UUID playerId = player.getUniqueId();
-        if (this.storage.hasContainerInventory(part.containerKey(), playerId)) {
-            return this.storage.getContainerInventory(part.containerKey(), playerId, size);
+        if (this.storage.hasContainerInventory(containerKey, playerId)) {
+            ItemStack[] contents = this.storage.getContainerInventory(containerKey, playerId, size);
+            if (this.plugin.isAdvancedLoggingEnabled()) {
+                this.plugin.logAdvanced(
+                    "Opened stored personal loot inventory: player=%s, source=%s, sourceKey=%s, location=%s, "
+                        + "lootTable=%s, slots=%d, items=[%s]",
+                    LogDescriptions.player(player),
+                    sourceDescription,
+                    containerKey,
+                    LogDescriptions.location(location),
+                    lootTable.getKey(),
+                    size,
+                    LogDescriptions.items(contents)
+                );
+            }
+            return contents;
         }
 
         Inventory generated = Bukkit.createInventory(null, size);
-        part.lootTable().fillInventory(
+        lootTable.fillInventory(
             generated,
-            new Random(seed(part.containerKey(), playerId)),
-            new LootContext.Builder(part.block().getLocation()).killer(player).build()
+            new Random(seed(containerKey, playerId)),
+            new LootContext.Builder(location).killer(player).build()
         );
         ItemStack[] contents = generated.getContents();
-        this.storage.setContainerInventory(part.containerKey(), playerId, contents);
+        this.storage.setContainerInventory(containerKey, playerId, contents);
+        if (this.plugin.isAdvancedLoggingEnabled()) {
+            this.plugin.logAdvanced(
+                "Created personal loot inventory: player=%s, source=%s, sourceKey=%s, location=%s, "
+                    + "lootTable=%s, slots=%d, items=[%s]",
+                LogDescriptions.player(player),
+                sourceDescription,
+                containerKey,
+                LogDescriptions.location(location),
+                lootTable.getKey(),
+                size,
+                LogDescriptions.items(contents)
+            );
+        }
         return contents;
     }
 
@@ -553,30 +562,16 @@ public final class LootListener implements Listener {
         }
     }
 
-    private boolean isNaturalLootFrame(final ItemFrame itemFrame) {
-        if (itemFrame.getItem().getType() == Material.AIR) {
-            return false;
-        }
-
-        PersistentDataContainer dataContainer = itemFrame.getPersistentDataContainer();
-        if (dataContainer.has(this.playerPlacedFrameKey, PersistentDataType.BYTE)
-            || dataContainer.has(this.legacyPlayerPlacedFrameKey, PersistentDataType.BYTE)) {
-            return false;
-        }
-
-        return lootFrameMaterials().contains(itemFrame.getItem().getType());
-    }
-
-    private Set<Material> lootFrameMaterials() {
-        Set<Material> materials = new HashSet<>();
-        FileConfiguration config = this.plugin.getConfig();
-        for (String materialName : config.getStringList("loot-frame-materials")) {
-            Material material = Material.matchMaterial(materialName);
-            if (material != null) {
-                materials.add(material);
+    void closeVirtualContainerViews(final String containerKey) {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            Inventory topInventory = player.getOpenInventory().getTopInventory();
+            if (!(topInventory.getHolder() instanceof PerPlayerLootInventoryHolder holder)) {
+                continue;
+            }
+            if (holder.parts().stream().anyMatch(part -> part.containerKey().equals(containerKey))) {
+                player.closeInventory();
             }
         }
-        return materials;
     }
 
     private boolean isProtectedLootContainerInventory(final Inventory inventory) {
@@ -591,6 +586,20 @@ public final class LootListener implements Listener {
     }
 
     private boolean isProtectedLootContainerHolder(final InventoryHolder holder) {
+        if (holder instanceof StorageMinecart minecart) {
+            LootTable lootTable = minecart.getLootTable();
+            if (lootTable != null) {
+                tagLootMinecart(minecart, lootTable);
+                return true;
+            }
+            String containerKey = entityContainerKey(minecart.getUniqueId());
+            if (hasManagedLootMinecartTag(minecart) || this.storage.hasContainerData(containerKey)) {
+                cleanupLostLootMinecart(minecart);
+                return true;
+            }
+            return false;
+        }
+
         if (!(holder instanceof BlockInventoryHolder blockHolder)) {
             return false;
         }
@@ -621,6 +630,16 @@ public final class LootListener implements Listener {
     }
 
     private void cleanupLostLootContainerData(final InventoryHolder holder) {
+        if (holder instanceof StorageMinecart minecart) {
+            LootTable lootTable = minecart.getLootTable();
+            if (lootTable != null) {
+                tagLootMinecart(minecart, lootTable);
+            } else {
+                cleanupLostLootMinecart(minecart);
+            }
+            return;
+        }
+
         if (!(holder instanceof BlockInventoryHolder blockHolder)) {
             return;
         }
@@ -732,6 +751,54 @@ public final class LootListener implements Listener {
         tileState.update(false, false);
     }
 
+    private void tagLootMinecarts(final Chunk chunk) {
+        for (Entity entity : chunk.getEntities()) {
+            if (entity instanceof StorageMinecart minecart && minecart.getLootTable() != null) {
+                tagLootMinecart(minecart, minecart.getLootTable());
+            }
+        }
+    }
+
+    void tagLootMinecart(final StorageMinecart minecart, final LootTable lootTable) {
+        PersistentDataContainer dataContainer = minecart.getPersistentDataContainer();
+        String lootTableKey = lootTable.getKey().toString();
+        long seed = minecart.getSeed();
+        if (lootTableKey.equals(dataContainer.get(this.lootContainerTableKey, PersistentDataType.STRING))
+            && dataContainer.getOrDefault(this.lootContainerSeedKey, PersistentDataType.LONG, 0L) == seed) {
+            return;
+        }
+        dataContainer.set(this.lootContainerTableKey, PersistentDataType.STRING, lootTableKey);
+        dataContainer.set(this.lootContainerSeedKey, PersistentDataType.LONG, seed);
+    }
+
+    private boolean hasManagedLootMinecartTag(final StorageMinecart minecart) {
+        return minecart.getPersistentDataContainer().has(this.lootContainerTableKey, PersistentDataType.STRING);
+    }
+
+    boolean isManagedNaturalLootMinecart(final StorageMinecart minecart) {
+        LootTable lootTable = minecart.getLootTable();
+        if (lootTable != null) {
+            tagLootMinecart(minecart, lootTable);
+            return true;
+        }
+        return hasManagedLootMinecartTag(minecart)
+            || this.storage.hasContainerData(entityContainerKey(minecart.getUniqueId()));
+    }
+
+    void cleanupLostLootMinecart(final StorageMinecart minecart) {
+        if (minecart.getLootTable() != null) {
+            tagLootMinecart(minecart, minecart.getLootTable());
+            return;
+        }
+        String containerKey = entityContainerKey(minecart.getUniqueId());
+        if (!hasManagedLootMinecartTag(minecart) && !this.storage.hasContainerData(containerKey)) {
+            return;
+        }
+        minecart.getPersistentDataContainer().remove(this.lootContainerTableKey);
+        minecart.getPersistentDataContainer().remove(this.lootContainerSeedKey);
+        this.storage.removeContainerData(containerKey);
+    }
+
     private boolean hasManagedLootContainerTag(final BlockState state) {
         if (!(state instanceof TileState tileState)) {
             return false;
@@ -759,36 +826,76 @@ public final class LootListener implements Listener {
             tileState.update(false, false);
         }
         this.storage.removeContainerData(containerKey);
+        this.plugin.logAdvanced(
+            "Loot container left personal management: block=%s, sourceKey=%s, location=%s; personal data removed",
+            block.getType(),
+            containerKey,
+            LogDescriptions.location(block.getLocation())
+        );
     }
 
     private void cleanupDestroyedLootContainer(final Block block) {
         BlockState state = block.getState();
-        if (isManagedNaturalLootContainer(state) || this.storage.hasContainerData(containerKey(block.getLocation()))) {
-            this.storage.removeContainerData(containerKey(block.getLocation()));
+        String containerKey = containerKey(block.getLocation());
+        if (isManagedNaturalLootContainer(state) || this.storage.hasContainerData(containerKey)) {
+            closeVirtualContainerViews(containerKey);
+            this.storage.removeContainerData(containerKey);
+            this.plugin.logAdvanced(
+                "Natural loot container removed by explosion: block=%s, sourceKey=%s, location=%s; personal data removed",
+                block.getType(),
+                containerKey,
+                LogDescriptions.location(block.getLocation())
+            );
         }
     }
 
-    private boolean canDestroyNaturalLootContainer(final Player player) {
-        return this.plugin.getConfig().getBoolean("allow-destroy-natural-loot-containers", false)
-            || player.hasPermission("perplayerloot.destroy.containers");
+    private void protectNaturalLootContainersFromExplosion(final List<Block> blocks) {
+        if (!isContainerDestructionProtectionEnabled()
+            || this.plugin.settings().containers().allowDestruction()) {
+            return;
+        }
+        blocks.removeIf(block -> {
+            String key = containerKey(block.getLocation());
+            boolean protectedContainer = isManagedNaturalLootContainer(block.getState())
+                || this.storage.hasContainerData(key);
+            if (protectedContainer) {
+                this.plugin.logAdvanced(
+                    "Protected natural loot container from explosion: block=%s, sourceKey=%s, location=%s",
+                    block.getType(),
+                    key,
+                    LogDescriptions.location(block.getLocation())
+                );
+            }
+            return protectedContainer;
+        });
+    }
+
+    boolean canDestroyNaturalLootContainer(final Player player) {
+        return ProtectionPolicy.canDestroyContainer(
+            this.plugin.settings().containers(),
+            player.hasPermission("perplayerloot.destroy.containers")
+        );
     }
 
     private boolean canMergeNaturalLootContainer(final Player player) {
-        return this.plugin.getConfig().getBoolean("allow-merge-natural-loot-containers", false)
-            || player.hasPermission("perplayerloot.merge.containers");
+        return ProtectionPolicy.canMergeContainer(
+            this.plugin.settings().containers(),
+            player.hasPermission("perplayerloot.merge.containers")
+        );
     }
 
-    private boolean canDestroyNaturalLootFrame(final Player player) {
-        return this.plugin.getConfig().getBoolean("allow-destroy-natural-loot-frames", false)
-            || (player.isSneaking()
-                && (this.plugin.getConfig().getBoolean("allow-sneak-destroy-natural-loot-frames", false)
-                    || player.hasPermission("perplayerloot.destroy.frames")));
+    boolean isContainerDestructionProtectionEnabled() {
+        return this.plugin.settings().containers().protectDestruction();
     }
 
     private static String containerKey(final Location location) {
         World world = location.getWorld();
         String worldId = world == null ? "unknown" : world.getUID().toString();
         return worldId + ";" + location.getBlockX() + ";" + location.getBlockY() + ";" + location.getBlockZ();
+    }
+
+    static String entityContainerKey(final UUID entityId) {
+        return "entity;" + entityId;
     }
 
     private static long seed(final String containerKey, final UUID playerId) {

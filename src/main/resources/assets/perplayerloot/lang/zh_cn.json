@@ -1,9 +1,11 @@
 {
   "message.perplayerloot.frame_already_claimed": "你已经领取过这个战利品了。",
   "message.perplayerloot.frame_already_claimed_cannot_place": "你不能在已领取的战利品展示框中放置物品。",
-  "message.perplayerloot.personal_drops_disabled": "未安装 ProtocolLib，个人展示框掉落物功能已禁用。",
+  "message.perplayerloot.personal_drops_disabled": "未安装 ProtocolLib，个人展示框和可疑方块掉落物功能已禁用。",
   "message.perplayerloot.no_container_destroy_permission": "你没有权限破坏这个战利品容器。",
   "message.perplayerloot.no_frame_destroy_permission": "你没有权限破坏这个战利品展示框。",
   "message.perplayerloot.reload_success": "PerPlayerLoot 配置已重载。",
-  "message.perplayerloot.reload_usage": "用法：/perplayerloot reload"
+  "message.perplayerloot.reload_usage": "用法：/perplayerloot <reload|cleanup containers>",
+  "message.perplayerloot.brushable_already_claimed": "你已经领取过这个可疑方块的战利品了。",
+  "message.perplayerloot.no_brushable_destroy_permission": "你没有权限破坏这个自然生成的可疑方块。"
 }
