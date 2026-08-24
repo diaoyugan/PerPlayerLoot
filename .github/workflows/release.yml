@@ -1,0 +1,105 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build, test, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Gradle and cache
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: false
+          cache-cleanup: on-success
+
+      - name: Resolve release version
+        id: release
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          version="${version//\//-}"
+          if [[ -z "$version" ]]; then
+            echo "The release tag did not produce a usable version." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        shell: bash
+        run: |
+          chmod +x ./gradlew
+          ./gradlew clean check jar --no-daemon -Pversion="${{ steps.release.outputs.version }}"
+
+      - name: Prepare release assets
+        id: assets
+        shell: bash
+        run: |
+          jar="build/libs/PerPlayerLoot-${{ steps.release.outputs.version }}.jar"
+          if [[ ! -f "$jar" ]]; then
+            echo "Expected build artifact was not created: $jar" >&2
+            exit 1
+          fi
+          directory="$(dirname "$jar")"
+          filename="$(basename "$jar")"
+          (
+            cd "$directory"
+            sha256sum "$filename" > "$filename.sha256"
+          )
+          echo "jar=$jar" >> "$GITHUB_OUTPUT"
+          echo "checksum=$jar.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: PerPlayerLoot-${{ steps.release.outputs.version }}
+          path: |
+            ${{ steps.assets.outputs.jar }}
+            ${{ steps.assets.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_JAR: ${{ steps.assets.outputs.jar }}
+          RELEASE_CHECKSUM: ${{ steps.assets.outputs.checksum }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              "$RELEASE_JAR" \
+              "$RELEASE_CHECKSUM" \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              "$RELEASE_JAR" \
+              "$RELEASE_CHECKSUM" \
+              --verify-tag \
+              --generate-notes \
+              --title "PerPlayerLoot $RELEASE_VERSION"
+          fi
