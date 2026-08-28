@@ -10,6 +10,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.hanging.HangingBreakEvent;
 import org.bukkit.event.hanging.HangingBreakByEntityEvent;
 import org.bukkit.event.hanging.HangingPlaceEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
@@ -21,6 +22,7 @@ import top.diaoyugan.perPlayerLoot.config.ProtectionPolicy;
 import top.diaoyugan.perPlayerLoot.logging.LogDescriptions;
 import top.diaoyugan.perPlayerLoot.message.Messages;
 import top.diaoyugan.perPlayerLoot.personal.PersonalDropManager;
+import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 
 /** Detects, protects, and claims naturally generated loot item frames. */
 public final class ItemFrameLootListener implements Listener {
@@ -29,12 +31,21 @@ public final class ItemFrameLootListener implements Listener {
 
     private final PerPlayerLoot plugin;
     private final PersonalDropManager personalDropManager;
+    private final LootStorage storage;
+    private final ClaimReadinessGuard claimReadiness;
     private final NamespacedKey playerManagedFrameKey;
     private final NamespacedKey legacyPlayerPlacedFrameKey;
 
-    public ItemFrameLootListener(final PerPlayerLoot plugin, final PersonalDropManager personalDropManager) {
+    public ItemFrameLootListener(
+        final PerPlayerLoot plugin,
+        final PersonalDropManager personalDropManager,
+        final LootStorage storage,
+        final ClaimReadinessGuard claimReadiness
+    ) {
         this.plugin = plugin;
         this.personalDropManager = personalDropManager;
+        this.storage = storage;
+        this.claimReadiness = claimReadiness;
         this.playerManagedFrameKey = new NamespacedKey(plugin, "player_managed_frame");
         this.legacyPlayerPlacedFrameKey = new NamespacedKey(plugin, "player_placed_frame");
     }
@@ -51,6 +62,10 @@ public final class ItemFrameLootListener implements Listener {
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onClaimedFrameInteract(final PlayerInteractEntityEvent event) {
         if (!(event.getRightClicked() instanceof ItemFrame itemFrame) || !isNaturalLootFrame(itemFrame)) {
+            return;
+        }
+        if (!this.claimReadiness.allow(event.getPlayer(), itemFrame.getLocation())) {
+            event.setCancelled(true);
             return;
         }
         if (!this.personalDropManager.hasClaimedOrActiveDrop(event.getPlayer(), itemFrame)) {
@@ -81,12 +96,21 @@ public final class ItemFrameLootListener implements Listener {
     }
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
-    public void onHangingBreakByEntity(final HangingBreakByEntityEvent event) {
+    public void onHangingBreak(final HangingBreakEvent event) {
         Hanging entity = event.getEntity();
         if (!(entity instanceof ItemFrame itemFrame) || !isNaturalLootFrame(itemFrame)) {
             return;
         }
-        if (event.getRemover() instanceof Player player) {
+        if (!this.claimReadiness.isReady(itemFrame.getChunk())) {
+            event.setCancelled(true);
+            if (event instanceof HangingBreakByEntityEvent byEntity
+                && byEntity.getRemover() instanceof Player player) {
+                this.claimReadiness.allow(player, itemFrame.getChunk());
+            }
+            return;
+        }
+        if (event instanceof HangingBreakByEntityEvent byEntity
+            && byEntity.getRemover() instanceof Player player) {
             if (canDestroy(player)) {
                 return;
             }
@@ -104,10 +128,24 @@ public final class ItemFrameLootListener implements Listener {
         }
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onHangingBreakCleanup(final HangingBreakEvent event) {
+        if (event.getEntity() instanceof ItemFrame itemFrame && isNaturalLootFrame(itemFrame)) {
+            this.storage.removeFrameClaims(itemFrame);
+        }
+    }
+
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onFrameDamaged(final EntityDamageByEntityEvent event) {
         Entity entity = event.getEntity();
         if (!(entity instanceof ItemFrame itemFrame) || !isNaturalLootFrame(itemFrame)) {
+            return;
+        }
+        if (!this.claimReadiness.isReady(itemFrame.getChunk())) {
+            event.setCancelled(true);
+            if (event.getDamager() instanceof Player player) {
+                this.claimReadiness.allow(player, itemFrame.getChunk());
+            }
             return;
         }
         if (event.getDamager() instanceof Player player) {

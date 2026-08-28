@@ -16,8 +16,6 @@ public interface PersonalEntityVisibilityAdapter extends AutoCloseable {
 
     void sendEmptyItemFrameToOwner(ItemFrame itemFrame, Player owner);
 
-    void registerFrameClaim(UUID frameUuid, UUID playerUuid);
-
     void resendClaimedFrameViews(Player player);
 
     boolean sendBrushablePreview(Player player, Location location, BrushableBlock brushable, BlockFace brushFace);

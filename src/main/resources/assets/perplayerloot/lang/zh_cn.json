@@ -7,5 +7,7 @@
   "message.perplayerloot.reload_success": "PerPlayerLoot 配置已重载。",
   "message.perplayerloot.reload_usage": "用法：/perplayerloot <reload|cleanup containers>",
   "message.perplayerloot.brushable_already_claimed": "你已经领取过这个可疑方块的战利品了。",
-  "message.perplayerloot.no_brushable_destroy_permission": "你没有权限破坏这个自然生成的可疑方块。"
+  "message.perplayerloot.no_brushable_destroy_permission": "你没有权限破坏这个自然生成的可疑方块。",
+  "message.perplayerloot.claim_chunk_loading": "该区域的个人战利品数据尚未就绪，请稍后再试。",
+  "message.perplayerloot.claim_chunk_failed": "该区域的个人战利品数据加载失败，操作已暂时阻止。"
 }

@@ -7,5 +7,7 @@
   "message.perplayerloot.reload_success": "PerPlayerLoot configuration reloaded.",
   "message.perplayerloot.reload_usage": "Usage: /perplayerloot <reload|cleanup containers>",
   "message.perplayerloot.brushable_already_claimed": "You already claimed the loot from this suspicious block.",
-  "message.perplayerloot.no_brushable_destroy_permission": "You do not have permission to destroy this natural suspicious block."
+  "message.perplayerloot.no_brushable_destroy_permission": "You do not have permission to destroy this natural suspicious block.",
+  "message.perplayerloot.claim_chunk_loading": "Personal loot data for this area is still loading. Please try again shortly.",
+  "message.perplayerloot.claim_chunk_failed": "Personal loot data for this area failed to load; protected actions are temporarily blocked."
 }

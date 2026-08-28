@@ -46,10 +46,6 @@ final class ProtocolLibPersonalEntityVisibilityAdapter implements PersonalEntity
         this.itemFrames.sendEmpty(frame, owner);
     }
 
-    @Override public void registerFrameClaim(final UUID frameUuid, final UUID playerUuid) {
-        this.itemFrames.registerClaim(frameUuid, playerUuid);
-    }
-
     @Override public void resendClaimedFrameViews(final Player player) {
         this.itemFrames.resendClaimedViews(player);
     }

@@ -11,6 +11,8 @@ import top.diaoyugan.perPlayerLoot.listener.BrushableLootListener;
 import top.diaoyugan.perPlayerLoot.listener.ItemFrameLootListener;
 import top.diaoyugan.perPlayerLoot.listener.MinecartLootListener;
 import top.diaoyugan.perPlayerLoot.listener.ContainerProtectionListener;
+import top.diaoyugan.perPlayerLoot.listener.ClaimChunkListener;
+import top.diaoyugan.perPlayerLoot.listener.ClaimReadinessGuard;
 import top.diaoyugan.perPlayerLoot.logging.AdvancedLogger;
 import top.diaoyugan.perPlayerLoot.message.Messages;
 import top.diaoyugan.perPlayerLoot.personal.PersonalDropManager;
@@ -36,6 +38,11 @@ public final class PerPlayerLoot extends JavaPlugin {
         this.lootStorage = new LootStorage(this);
         this.lootStorage.load();
 
+        ClaimReadinessGuard claimReadiness = new ClaimReadinessGuard(this.lootStorage);
+        ClaimChunkListener claimChunks = new ClaimChunkListener(this.lootStorage);
+        getServer().getPluginManager().registerEvents(claimReadiness, this);
+        getServer().getPluginManager().registerEvents(claimChunks, this);
+
         this.visibilityAdapter = PersonalEntityVisibilityAdapters.create(this, this.lootStorage);
         this.personalDropManager = new PersonalDropManager(this, this.lootStorage, this.visibilityAdapter);
         this.personalDropManager.start();
@@ -51,7 +58,7 @@ public final class PerPlayerLoot extends JavaPlugin {
         );
         lootListener.tagLoadedLootContainers();
         getServer().getPluginManager().registerEvents(
-            new ItemFrameLootListener(this, this.personalDropManager),
+            new ItemFrameLootListener(this, this.personalDropManager, this.lootStorage, claimReadiness),
             this
         );
         getServer().getPluginManager().registerEvents(
@@ -63,11 +70,13 @@ public final class PerPlayerLoot extends JavaPlugin {
         this.brushableLootListener = new BrushableLootListener(
             this,
             this.lootStorage,
-            this.personalDropManager
+            this.personalDropManager,
+            claimReadiness
         );
         getServer().getPluginManager().registerEvents(this.brushableLootListener, this);
         this.brushableLootListener.start();
         this.brushableLootListener.tagLoadedBrushables();
+        claimChunks.loadAlreadyLoadedChunks();
 
         registerCommand(
             "perplayerloot",

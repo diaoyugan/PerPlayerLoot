@@ -11,24 +11,27 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
-import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.logging.Level;
+import org.bukkit.Bukkit;
+import org.bukkit.Chunk;
 import org.bukkit.Material;
+import org.bukkit.World;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import top.diaoyugan.perPlayerLoot.PerPlayerLoot;
+import top.diaoyugan.perPlayerLoot.storage.ChunkKey;
 import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 
 final class ItemFrameViewController implements AutoCloseable {
     private final PerPlayerLoot plugin;
     private final LootStorage storage;
     private final ProtocolManager protocolManager;
-    private final Map<UUID, Set<UUID>> claimsByPlayer = new ConcurrentHashMap<>();
     private final Map<Class<?>, Integer> itemIndexes = new ConcurrentHashMap<>();
+    private final Consumer<ChunkKey> chunkReadyListener;
 
     ItemFrameViewController(
         final PerPlayerLoot plugin, final LootStorage storage, final ProtocolManager protocolManager
@@ -36,22 +39,19 @@ final class ItemFrameViewController implements AutoCloseable {
         this.plugin = plugin;
         this.storage = storage;
         this.protocolManager = protocolManager;
-    }
-
-    void registerClaim(final UUID frameUuid, final UUID playerUuid) {
-        this.claimsByPlayer.compute(playerUuid, (ignored, existing) -> {
-            Set<UUID> updated = ConcurrentHashMap.newKeySet();
-            if (existing != null) updated.addAll(existing);
-            updated.add(frameUuid);
-            return updated;
-        });
+        this.chunkReadyListener = this::resendClaimedViewsInChunk;
+        this.storage.addClaimChunkReadyListener(this.chunkReadyListener);
     }
 
     void resendClaimedViews(final Player player) {
-        Set<UUID> frameIds = this.storage.getClaimedFrameIds(player.getUniqueId());
-        this.claimsByPlayer.put(player.getUniqueId(), Set.copyOf(frameIds));
-        for (Entity entity : player.getWorld().getEntitiesByClass(ItemFrame.class)) {
-            if (frameIds.contains(entity.getUniqueId())) sendEmpty((ItemFrame) entity, player);
+        for (Chunk chunk : player.getSentChunks()) {
+            if (!this.storage.isClaimChunkReady(chunk)) continue;
+            for (Entity entity : chunk.getEntities()) {
+                if (entity instanceof ItemFrame frame
+                    && this.storage.hasClaimedFrame(frame, player.getUniqueId())) {
+                    sendEmpty(frame, player);
+                }
+            }
         }
     }
 
@@ -75,8 +75,8 @@ final class ItemFrameViewController implements AutoCloseable {
         Integer entityId = PersonalEntityPacketVisibility.readEntityId(event.getPacket());
         if (entityId == null) return;
         Entity entity = this.protocolManager.getEntityFromID(event.getPlayer().getWorld(), entityId);
-        Set<UUID> claims = this.claimsByPlayer.get(event.getPlayer().getUniqueId());
-        if (!(entity instanceof ItemFrame itemFrame) || claims == null || !claims.contains(itemFrame.getUniqueId())) return;
+        if (!(entity instanceof ItemFrame itemFrame)
+            || !this.storage.hasClaimedFrame(itemFrame, event.getPlayer().getUniqueId())) return;
         OptionalInt itemIndex = itemIndex(itemFrame);
         if (itemIndex.isEmpty()) return;
 
@@ -95,6 +95,20 @@ final class ItemFrameViewController implements AutoCloseable {
         PacketContainer clone = event.getPacket().shallowClone();
         clone.getDataValueCollectionModifier().write(0, rewritten);
         event.setPacket(clone);
+    }
+
+    private void resendClaimedViewsInChunk(final ChunkKey key) {
+        World world = Bukkit.getWorld(key.worldId());
+        if (world == null || !world.isChunkLoaded(key.chunkX(), key.chunkZ())) return;
+        Chunk chunk = world.getChunkAt(key.chunkX(), key.chunkZ());
+        java.util.Collection<Player> viewers = chunk.getPlayersSeeingChunk();
+        if (viewers.isEmpty()) return;
+        for (Entity entity : chunk.getEntities()) {
+            if (!(entity instanceof ItemFrame frame)) continue;
+            for (Player player : viewers) {
+                if (this.storage.hasClaimedFrame(frame, player.getUniqueId())) sendEmpty(frame, player);
+            }
+        }
     }
 
     private OptionalInt itemIndex(final ItemFrame itemFrame) {
@@ -116,7 +130,7 @@ final class ItemFrameViewController implements AutoCloseable {
     }
 
     @Override public void close() {
-        this.claimsByPlayer.clear();
+        this.storage.removeClaimChunkReadyListener(this.chunkReadyListener);
         this.itemIndexes.clear();
     }
 }

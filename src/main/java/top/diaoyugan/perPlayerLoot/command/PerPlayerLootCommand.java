@@ -36,9 +36,15 @@ public final class PerPlayerLootCommand implements BasicCommand {
                 sender.sendMessage(Component.text("You do not have permission to clean up stored container data."));
                 return;
             }
-            int removed = this.lootListener.cleanupOrphanContainerDataForLoadedChunks();
-            sender.sendMessage(Component.text("Removed " + removed + " orphaned loot container storage entr"
-                + (removed == 1 ? "y." : "ies.")));
+            sender.sendMessage(Component.text("Container cleanup started."));
+            this.lootListener.cleanupOrphanContainerDataForLoadedChunks(removed -> {
+                if (removed < 0) {
+                    sender.sendMessage(Component.text("Container cleanup failed; check the server log."));
+                    return;
+                }
+                sender.sendMessage(Component.text("Removed " + removed + " orphaned loot container storage entr"
+                    + (removed == 1 ? "y." : "ies.")));
+            });
             return;
         }
 

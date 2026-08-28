@@ -8,6 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Path;
 import java.sql.ResultSet;
 import java.util.UUID;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -16,14 +19,36 @@ class SqliteDatabaseTest {
     @TempDir Path temporaryDirectory;
 
     @Test
+    void closeIsSafeBeforeOpenAndIdempotent() {
+        SqliteDatabase database = new SqliteDatabase(
+            this.temporaryDirectory.resolve("never-opened.sqlite").toFile(), Logger.getAnonymousLogger()
+        );
+        database.close();
+        database.close();
+    }
+
+    @Test
+    void rejectsOpeningTheSameConnectionTwice() throws Exception {
+        try (SqliteDatabase database = new SqliteDatabase(
+            this.temporaryDirectory.resolve("open-once.sqlite").toFile(), Logger.getAnonymousLogger()
+        )) {
+            database.open("");
+            assertThrows(java.sql.SQLException.class, () -> database.open(""));
+        }
+    }
+
+    @Test
     void commitsSuccessfulTransactionAndRollsBackFailedTransaction() throws Exception {
         try (SqliteDatabase database = new SqliteDatabase(
             this.temporaryDirectory.resolve("loot.sqlite").toFile(), Logger.getAnonymousLogger()
         )) {
             database.open("");
-            database.connection().createStatement().execute(
-                "CREATE TABLE claims(source TEXT NOT NULL, player TEXT NOT NULL, PRIMARY KEY(source, player))"
-            );
+            database.execute(connection -> {
+                connection.createStatement().execute(
+                    "CREATE TABLE claims(source TEXT NOT NULL, player TEXT NOT NULL, PRIMARY KEY(source, player))"
+                );
+                return null;
+            });
             database.transaction(connection -> {
                 connection.createStatement().execute("INSERT INTO claims VALUES('frame', 'player-a')");
                 return null;
@@ -36,6 +61,43 @@ class SqliteDatabaseTest {
                 return null;
             }));
             assertEquals(1, rowCount(database));
+        }
+    }
+
+    @Test
+    void serializesSubmittedOperationsOnOneDatabaseThread() throws Exception {
+        try (SqliteDatabase database = openClaimDatabase()) {
+            Set<Thread> threads = ConcurrentHashMap.newKeySet();
+            CompletableFuture<?>[] operations = new CompletableFuture<?>[32];
+            for (int index = 0; index < operations.length; index++) {
+                operations[index] = database.submit(connection -> {
+                    threads.add(Thread.currentThread());
+                    return null;
+                });
+            }
+            CompletableFuture.allOf(operations).join();
+            assertEquals(1, threads.size());
+            assertTrue(threads.iterator().next().getName().contains("PerPlayerLoot-SQLite"));
+        }
+    }
+
+    @Test
+    void commitsAndRollsBackSubmittedTransactions() throws Exception {
+        try (SqliteDatabase database = openClaimDatabase()) {
+            database.submitTransaction(connection -> {
+                connection.createStatement().execute("INSERT INTO claims VALUES('async', 'player-a')");
+                return null;
+            }).join();
+            assertEquals(1, count(database, "claims"));
+
+            assertThrows(java.util.concurrent.CompletionException.class, () ->
+                database.submitTransaction(connection -> {
+                    connection.createStatement().execute("INSERT INTO claims VALUES('rolled-back', 'player-b')");
+                    connection.createStatement().execute("INSERT INTO missing_table VALUES(1)");
+                    return null;
+                }).join()
+            );
+            assertEquals(1, count(database, "claims"));
         }
     }
 
@@ -63,10 +125,12 @@ class SqliteDatabaseTest {
     }
 
     private static int rowCount(final SqliteDatabase database) throws Exception {
-        try (ResultSet rows = database.connection().createStatement().executeQuery("SELECT COUNT(*) FROM claims")) {
-            rows.next();
-            return rows.getInt(1);
-        }
+        return database.execute(connection -> {
+            try (ResultSet rows = connection.createStatement().executeQuery("SELECT COUNT(*) FROM claims")) {
+                rows.next();
+                return rows.getInt(1);
+            }
+        });
     }
 
     private SqliteDatabase openClaimDatabase() throws Exception {
@@ -74,12 +138,15 @@ class SqliteDatabaseTest {
             this.temporaryDirectory.resolve(UUID.randomUUID() + ".sqlite").toFile(), Logger.getAnonymousLogger()
         );
         database.open("");
-        database.connection().createStatement().execute(
-            "CREATE TABLE claims(source TEXT NOT NULL, player TEXT NOT NULL, PRIMARY KEY(source, player))"
-        );
-        database.connection().createStatement().execute(
-            "CREATE TABLE drops(id TEXT NOT NULL PRIMARY KEY, source TEXT NOT NULL)"
-        );
+        database.execute(connection -> {
+            connection.createStatement().execute(
+                "CREATE TABLE claims(source TEXT NOT NULL, player TEXT NOT NULL, PRIMARY KEY(source, player))"
+            );
+            connection.createStatement().execute(
+                "CREATE TABLE drops(id TEXT NOT NULL PRIMARY KEY, source TEXT NOT NULL)"
+            );
+            return null;
+        });
         return database;
     }
 
@@ -107,9 +174,11 @@ class SqliteDatabaseTest {
             case "drops" -> "SELECT COUNT(*) FROM drops";
             default -> throw new IllegalArgumentException(table);
         };
-        try (ResultSet rows = database.connection().createStatement().executeQuery(sql)) {
-            rows.next();
-            return rows.getInt(1);
-        }
+        return database.execute(connection -> {
+            try (ResultSet rows = connection.createStatement().executeQuery(sql)) {
+                rows.next();
+                return rows.getInt(1);
+            }
+        });
     }
 }

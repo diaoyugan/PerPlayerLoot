@@ -8,6 +8,9 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
 import org.bukkit.Location;
@@ -38,9 +41,12 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.inventory.HopperInventorySearchEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
+import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.event.world.ChunkPopulateEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.BlockInventoryHolder;
@@ -59,6 +65,7 @@ import top.diaoyugan.perPlayerLoot.logging.LogDescriptions;
 import top.diaoyugan.perPlayerLoot.personal.PersonalDropManager;
 import top.diaoyugan.perPlayerLoot.storage.LootStorage;
 import top.diaoyugan.perPlayerLoot.storage.LootStorage.StoredContainer;
+import top.diaoyugan.perPlayerLoot.storage.ChunkKey;
 
 public final class LootListener implements Listener {
 
@@ -75,6 +82,11 @@ public final class LootListener implements Listener {
     private final NamespacedKey lootContainerTableKey;
     private final NamespacedKey lootContainerSeedKey;
     private final Map<String, Integer> openContainerCounts = new HashMap<>();
+    private final Map<ChunkKey, Long> containerCleanupGenerations = new HashMap<>();
+    private final Map<ChunkKey, Set<String>> loadedContainerSources = new HashMap<>();
+    private final Map<UUID, Long> containerOpenGenerations = new HashMap<>();
+    private long nextContainerCleanupGeneration;
+    private long nextContainerOpenGeneration;
 
     public LootListener(
         final PerPlayerLoot plugin,
@@ -91,6 +103,7 @@ public final class LootListener implements Listener {
         if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) {
             return;
         }
+        this.containerOpenGenerations.remove(event.getPlayer().getUniqueId());
 
         tagNaturalLootChestsNearPlacement(event);
 
@@ -134,13 +147,14 @@ public final class LootListener implements Listener {
     void protectBlockBreak(final BlockBreakEvent event) {
         BlockState state = event.getBlock().getState();
         String containerKey = containerKey(event.getBlock().getLocation());
-        if (!isManagedNaturalLootContainer(state) && !this.storage.hasContainerData(containerKey)) {
+        if (!isManagedNaturalLootContainer(state)
+            && !hasLoadedContainerSource(event.getBlock().getLocation(), containerKey)) {
             return;
         }
 
         if (canDestroyNaturalLootContainer(event.getPlayer())) {
             closeVirtualContainerViews(containerKey);
-            this.storage.removeContainerData(containerKey);
+            removeStoredContainerData(containerKey, event.getBlock().getLocation());
             this.plugin.logAdvanced(
                 "Natural loot container destroyed: player=%s, block=%s, sourceKey=%s, location=%s; personal data removed",
                 LogDescriptions.player(event.getPlayer()),
@@ -277,7 +291,31 @@ public final class LootListener implements Listener {
     public void onChunkLoad(final ChunkLoadEvent event) {
         tagLootContainers(event.getChunk());
         tagLootMinecarts(event.getChunk());
-        cleanupOrphanContainerData(event.getChunk());
+        scheduleOrphanContainerCleanup(event.getChunk());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onChunkUnload(final ChunkUnloadEvent event) {
+        ChunkKey key = ChunkKey.of(event.getChunk());
+        this.containerCleanupGenerations.remove(key);
+        this.loadedContainerSources.remove(key);
+    }
+
+    @EventHandler
+    public void onPlayerQuit(final PlayerQuitEvent event) {
+        this.containerOpenGenerations.remove(event.getPlayer().getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onAnyEntityInteract(final PlayerInteractEntityEvent event) {
+        this.containerOpenGenerations.remove(event.getPlayer().getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onAnyInventoryOpen(final InventoryOpenEvent event) {
+        if (event.getPlayer() instanceof Player player) {
+            this.containerOpenGenerations.remove(player.getUniqueId());
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -293,53 +331,114 @@ public final class LootListener implements Listener {
             for (Chunk chunk : world.getLoadedChunks()) {
                 tagLootContainers(chunk);
                 tagLootMinecarts(chunk);
-                cleanupOrphanContainerData(chunk);
+                scheduleOrphanContainerCleanup(chunk);
             }
         }
     }
 
-    public int cleanupOrphanContainerDataForLoadedChunks() {
-        int removed = 0;
-        for (StoredContainer container : this.storage.getAllContainerData()) {
-            World world = Bukkit.getWorld(container.worldId());
-            if (world == null) {
-                this.storage.removeContainerData(container.containerKey());
-                removed++;
-                continue;
+    public void cleanupOrphanContainerDataForLoadedChunks(
+        final java.util.function.IntConsumer completion
+    ) {
+        this.storage.getAllContainerDataAsync().whenComplete((containers, queryFailure) -> {
+            if (queryFailure != null) {
+                this.plugin.getLogger().log(
+                    java.util.logging.Level.WARNING,
+                    "Could not query stored container sources for cleanup.",
+                    queryFailure
+                );
+                if (this.plugin.isEnabled()) Bukkit.getScheduler().runTask(this.plugin, () -> completion.accept(-1));
+                return;
             }
-            if (!world.isChunkLoaded(container.chunkX(), container.chunkZ())) {
-                continue;
-            }
-            if (removeOrphanContainerData(world, container)) {
-                removed++;
-            }
-        }
-        return removed;
+            if (!this.plugin.isEnabled()) return;
+            Bukkit.getScheduler().runTask(this.plugin, () -> {
+                List<String> orphanKeys = new java.util.ArrayList<>();
+                for (StoredContainer container : containers) {
+                    World world = Bukkit.getWorld(container.worldId());
+                    if (world == null) {
+                        orphanKeys.add(container.containerKey());
+                    } else if (world.isChunkLoaded(container.chunkX(), container.chunkZ())
+                        && isOrphanContainerData(world, container)) {
+                        orphanKeys.add(container.containerKey());
+                    }
+                }
+                this.storage.removeContainerDataAsync(orphanKeys).whenComplete((ignored, deleteFailure) -> {
+                    if (!this.plugin.isEnabled()) return;
+                    Bukkit.getScheduler().runTask(
+                        this.plugin,
+                        () -> completion.accept(deleteFailure == null ? orphanKeys.size() : -1)
+                    );
+                    if (deleteFailure != null) {
+                        this.plugin.getLogger().log(
+                            java.util.logging.Level.WARNING,
+                            "Could not remove orphaned container data.",
+                            deleteFailure
+                        );
+                    }
+                });
+            });
+        });
     }
 
-    private void cleanupOrphanContainerData(final Chunk chunk) {
-        for (StoredContainer container : this.storage.getContainerDataInChunk(
-            chunk.getWorld().getUID(),
-            chunk.getX(),
-            chunk.getZ()
-        )) {
-            removeOrphanContainerData(chunk.getWorld(), container);
-        }
+    private void scheduleOrphanContainerCleanup(final Chunk chunk) {
+        ChunkKey key = ChunkKey.of(chunk);
+        long generation = ++this.nextContainerCleanupGeneration;
+        this.containerCleanupGenerations.put(key, generation);
+        this.storage.getContainerDataInChunkAsync(key.worldId(), key.chunkX(), key.chunkZ())
+            .whenComplete((containers, failure) -> {
+                if (failure != null) {
+                    this.plugin.getLogger().log(
+                        java.util.logging.Level.WARNING,
+                        "Could not inspect stored container sources in chunk " + key + ".",
+                        failure
+                    );
+                    return;
+                }
+                if (!this.plugin.isEnabled()) return;
+                Bukkit.getScheduler().runTask(
+                    this.plugin,
+                    () -> finishOrphanContainerCleanup(key, generation, containers)
+                );
+            });
     }
 
-    private boolean removeOrphanContainerData(final World world, final StoredContainer container) {
-        if (container.blockY() < world.getMinHeight() || container.blockY() >= world.getMaxHeight()) {
-            this.storage.removeContainerData(container.containerKey());
-            return true;
-        }
+    private void finishOrphanContainerCleanup(
+        final ChunkKey key,
+        final long generation,
+        final List<StoredContainer> containers
+    ) {
+        if (!Long.valueOf(generation).equals(this.containerCleanupGenerations.get(key))) return;
+        World world = Bukkit.getWorld(key.worldId());
+        if (world == null || !world.isChunkLoaded(key.chunkX(), key.chunkZ())) return;
 
+        Set<String> sourceKeys = new HashSet<>();
+        for (StoredContainer container : containers) sourceKeys.add(container.containerKey());
+        this.loadedContainerSources.put(key, sourceKeys);
+
+        List<String> orphanKeys = new java.util.ArrayList<>();
+        for (StoredContainer container : containers) {
+            if (isOrphanContainerData(world, container)) orphanKeys.add(container.containerKey());
+        }
+        if (orphanKeys.isEmpty()) return;
+        this.storage.removeContainerDataAsync(orphanKeys).whenComplete((ignored, failure) -> {
+            if (failure != null) {
+                this.plugin.getLogger().log(
+                    java.util.logging.Level.WARNING,
+                    "Could not remove orphaned container data in chunk " + key + ".",
+                    failure
+                );
+            } else {
+                runOnMain(() -> {
+                    Set<String> current = this.loadedContainerSources.get(key);
+                    if (current != null) current.removeAll(orphanKeys);
+                });
+            }
+        });
+    }
+
+    private boolean isOrphanContainerData(final World world, final StoredContainer container) {
+        if (container.blockY() < world.getMinHeight() || container.blockY() >= world.getMaxHeight()) return true;
         Block block = world.getBlockAt(container.blockX(), container.blockY(), container.blockZ());
-        if (isManagedNaturalLootContainer(block.getState())) {
-            return false;
-        }
-
-        this.storage.removeContainerData(container.containerKey());
-        return true;
+        return !isManagedNaturalLootContainer(block.getState());
     }
 
     private void tagLootContainers(final Chunk chunk) {
@@ -357,23 +456,39 @@ public final class LootListener implements Listener {
         }
 
         ItemStack[] combinedContents = event.getInventory().getContents();
+        String playerName = event.getPlayer().getName();
         for (InventoryPart part : holder.parts()) {
             ItemStack[] contents = Arrays.copyOfRange(
                 combinedContents,
                 part.offset(),
                 part.offset() + part.size()
             );
-            this.storage.setContainerInventory(part.containerKey(), holder.playerId(), contents);
-            if (this.plugin.isAdvancedLoggingEnabled()) {
-                this.plugin.logAdvanced(
-                    "Saved personal loot inventory: player=%s, sourceKey=%s, location=%s, slots=%d, items=[%s]",
-                    LogDescriptions.player(event.getPlayer().getName(), holder.playerId()),
-                    part.containerKey(),
-                    LogDescriptions.location(part.location()),
-                    part.size(),
-                    LogDescriptions.items(contents)
-                );
-            }
+            this.storage.setContainerInventoryAsync(part.containerKey(), holder.playerId(), contents)
+                .whenComplete((ignored, failure) -> {
+                    if (failure != null) {
+                        this.plugin.getLogger().log(
+                            java.util.logging.Level.SEVERE,
+                            "Could not save personal loot inventory " + part.containerKey() + ".",
+                            failure
+                        );
+                    } else {
+                        runOnMain(() -> {
+                            if (part.location() != null) {
+                                rememberLoadedContainerSource(part.location(), part.containerKey());
+                            }
+                            if (this.plugin.isAdvancedLoggingEnabled()) {
+                                this.plugin.logAdvanced(
+                                    "Saved personal loot inventory: player=%s, sourceKey=%s, location=%s, slots=%d, items=[%s]",
+                                    LogDescriptions.player(playerName, holder.playerId()),
+                                    part.containerKey(),
+                                    LogDescriptions.location(part.location()),
+                                    part.size(),
+                                    LogDescriptions.items(contents)
+                                );
+                            }
+                        });
+                    }
+                });
             if (part.location() != null) {
                 closeContainerLid(part.containerKey(), part.location());
             }
@@ -387,24 +502,28 @@ public final class LootListener implements Listener {
     ) {
         String containerKey = entityContainerKey(minecart.getUniqueId());
         int size = minecart.getInventory().getSize();
-        PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
-            player.getUniqueId(),
-            List.of(new InventoryPart(containerKey, null, 0, size))
-        );
-        Component title = minecart.customName();
-        if (title == null) {
-            title = Component.translatable("entity.minecraft.chest_minecart");
-        }
-        Inventory inventory = Bukkit.createInventory(holder, size, title);
-        inventory.setContents(loadOrGenerate(
+        long openGeneration = beginContainerOpen(player);
+        loadOrGenerate(
             player,
             containerKey,
             minecart.getLocation(),
             lootTable,
             size,
-            "CHEST_MINECART entityUuid=" + minecart.getUniqueId()
-        ));
-        player.openInventory(inventory);
+            "CHEST_MINECART entityUuid=" + minecart.getUniqueId(),
+            () -> isCurrentContainerOpen(player, openGeneration) && canStillOpen(player, minecart.getLocation())
+                && minecart.isValid() && isManagedNaturalLootMinecart(minecart),
+            contents -> {
+                PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
+                    player.getUniqueId(),
+                    List.of(new InventoryPart(containerKey, null, 0, size))
+                );
+                Component title = minecart.customName();
+                if (title == null) title = Component.translatable("entity.minecraft.chest_minecart");
+                Inventory inventory = Bukkit.createInventory(holder, size, title);
+                inventory.setContents(contents);
+                player.openInventory(inventory);
+            }
+        );
     }
 
     private void openSingleContainer(
@@ -417,77 +536,118 @@ public final class LootListener implements Listener {
         }
 
         int size = container.getInventory().getSize();
-        PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
-            player.getUniqueId(),
-            List.of(new InventoryPart(part.containerKey(), block.getLocation(), 0, size))
+        long openGeneration = beginContainerOpen(player);
+        loadOrGeneratePart(player, part, size, () -> isCurrentContainerOpen(player, openGeneration)
+            && canStillOpen(player, block.getLocation())
+            && isManagedNaturalLootContainer(block.getState()),
+            contents -> {
+                BlockState currentState = block.getState();
+                if (!(currentState instanceof Container currentContainer)) return;
+                PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
+                    player.getUniqueId(),
+                    List.of(new InventoryPart(part.containerKey(), block.getLocation(), 0, size))
+                );
+                Component customName = currentContainer instanceof Nameable nameable ? nameable.customName() : null;
+                Inventory inventory = customName == null
+                    ? Bukkit.createInventory(holder, size, Component.translatable(containerTitleKey(block.getType(), size)))
+                    : Bukkit.createInventory(holder, size, customName);
+                inventory.setContents(contents);
+                player.openInventory(inventory);
+                openContainerLid(part.containerKey(), block.getLocation());
+            }
         );
-        Component customName = container instanceof Nameable nameable ? nameable.customName() : null;
-        Inventory inventory = customName == null
-            ? Bukkit.createInventory(holder, size, Component.translatable(containerTitleKey(block.getType(), size)))
-            : Bukkit.createInventory(holder, size, customName);
-
-        inventory.setContents(loadOrGeneratePart(player, part, size));
-
-        player.openInventory(inventory);
-        openContainerLid(part.containerKey(), block.getLocation());
     }
 
     private void openNaturalDoubleChest(final Player player, final List<LootContainerPart> parts) {
-        PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
-            player.getUniqueId(),
-            List.of(
-                new InventoryPart(parts.get(0).containerKey(), parts.get(0).block().getLocation(), 0, 27),
-                new InventoryPart(parts.get(1).containerKey(), parts.get(1).block().getLocation(), 27, 27)
-            )
-        );
-        Component customName = customName(parts.get(0).block());
-        if (customName == null) {
-            customName = customName(parts.get(1).block());
-        }
-        Inventory combined = customName == null
-            ? Bukkit.createInventory(holder, 54, Component.translatable("container.chestDouble"))
-            : Bukkit.createInventory(holder, 54, customName);
-
+        ItemStack[][] loaded = new ItemStack[parts.size()][];
+        AtomicInteger remaining = new AtomicInteger(parts.size());
+        long openGeneration = beginContainerOpen(player);
+        BooleanSupplier valid = () -> isCurrentContainerOpen(player, openGeneration)
+            && canStillOpen(player, parts.getFirst().block().getLocation())
+            && parts.stream().allMatch(part -> isManagedNaturalLootContainer(part.block().getState()));
         for (int index = 0; index < parts.size(); index++) {
-            ItemStack[] contents = loadOrGeneratePart(player, parts.get(index), 27);
-            int offset = index * 27;
-            for (int slot = 0; slot < contents.length; slot++) {
-                combined.setItem(offset + slot, contents[slot]);
-            }
-        }
-
-        player.openInventory(combined);
-        for (LootContainerPart part : parts) {
-            openContainerLid(part.containerKey(), part.block().getLocation());
+            int partIndex = index;
+            loadOrGeneratePart(player, parts.get(index), 27, valid, contents -> {
+                loaded[partIndex] = contents;
+                if (remaining.decrementAndGet() != 0 || !valid.getAsBoolean()) return;
+                PerPlayerLootInventoryHolder holder = new PerPlayerLootInventoryHolder(
+                    player.getUniqueId(),
+                    List.of(
+                        new InventoryPart(parts.get(0).containerKey(), parts.get(0).block().getLocation(), 0, 27),
+                        new InventoryPart(parts.get(1).containerKey(), parts.get(1).block().getLocation(), 27, 27)
+                    )
+                );
+                Component customName = customName(parts.get(0).block());
+                if (customName == null) customName = customName(parts.get(1).block());
+                Inventory combined = customName == null
+                    ? Bukkit.createInventory(holder, 54, Component.translatable("container.chestDouble"))
+                    : Bukkit.createInventory(holder, 54, customName);
+                for (int loadedIndex = 0; loadedIndex < loaded.length; loadedIndex++) {
+                    for (int slot = 0; slot < loaded[loadedIndex].length; slot++) {
+                        combined.setItem(loadedIndex * 27 + slot, loaded[loadedIndex][slot]);
+                    }
+                }
+                player.openInventory(combined);
+                for (LootContainerPart loadedPart : parts) {
+                    openContainerLid(loadedPart.containerKey(), loadedPart.block().getLocation());
+                }
+            });
         }
     }
 
-    private ItemStack[] loadOrGeneratePart(
+    private void loadOrGeneratePart(
         final Player player,
         final LootContainerPart part,
-        final int size
+        final int size,
+        final BooleanSupplier sourceValid,
+        final Consumer<ItemStack[]> completion
     ) {
-        return loadOrGenerate(
+        loadOrGenerate(
             player,
             part.containerKey(),
             part.block().getLocation(),
             part.lootTable(),
             size,
-            part.block().getType().name()
+            part.block().getType().name(),
+            sourceValid,
+            completion
         );
     }
 
-    private ItemStack[] loadOrGenerate(
+    private void loadOrGenerate(
         final Player player,
         final String containerKey,
         final Location location,
         final LootTable lootTable,
         final int size,
-        final String sourceDescription
+        final String sourceDescription,
+        final BooleanSupplier sourceValid,
+        final Consumer<ItemStack[]> completion
     ) {
         UUID playerId = player.getUniqueId();
-        if (this.storage.hasContainerInventory(containerKey, playerId)) {
-            ItemStack[] contents = this.storage.getContainerInventory(containerKey, playerId, size);
+        this.storage.getContainerInventoryDataAsync(containerKey, playerId).whenComplete((serialized, readFailure) ->
+            runOnMain(() -> {
+                if (readFailure != null) {
+                    this.plugin.getLogger().log(
+                        java.util.logging.Level.SEVERE,
+                        "Could not load personal loot inventory " + containerKey + ".",
+                        readFailure
+                    );
+                    return;
+                }
+                if (!sourceValid.getAsBoolean()) return;
+                if (serialized != null) {
+                    ItemStack[] contents;
+                    try {
+                        contents = this.storage.decodeContainerInventory(serialized, size);
+                    } catch (RuntimeException exception) {
+                        this.plugin.getLogger().log(
+                            java.util.logging.Level.SEVERE,
+                            "Could not decode personal loot inventory " + containerKey + ".",
+                            exception
+                        );
+                        return;
+                    }
             if (this.plugin.isAdvancedLoggingEnabled()) {
                 this.plugin.logAdvanced(
                     "Opened stored personal loot inventory: player=%s, source=%s, sourceKey=%s, location=%s, "
@@ -501,19 +661,33 @@ public final class LootListener implements Listener {
                     LogDescriptions.items(contents)
                 );
             }
-            return contents;
-        }
+                    completion.accept(contents);
+                    return;
+                }
 
-        Inventory generated = Bukkit.createInventory(null, size);
-        lootTable.fillInventory(
-            generated,
-            new Random(seed(containerKey, playerId)),
-            new LootContext.Builder(location).killer(player).build()
-        );
-        ItemStack[] contents = generated.getContents();
-        this.storage.setContainerInventory(containerKey, playerId, contents);
-        if (this.plugin.isAdvancedLoggingEnabled()) {
-            this.plugin.logAdvanced(
+                Inventory generated = Bukkit.createInventory(null, size);
+                lootTable.fillInventory(
+                    generated,
+                    new Random(seed(containerKey, playerId)),
+                    new LootContext.Builder(location).killer(player).build()
+                );
+                ItemStack[] contents = generated.getContents();
+                this.storage.setContainerInventoryAsync(containerKey, playerId, contents)
+                    .whenComplete((ignored, writeFailure) -> runOnMain(() -> {
+                        if (writeFailure != null) {
+                            this.plugin.getLogger().log(
+                                java.util.logging.Level.SEVERE,
+                                "Could not create personal loot inventory " + containerKey + ".",
+                                writeFailure
+                            );
+                            return;
+                        }
+                        if (!sourceValid.getAsBoolean()) return;
+                        if (!containerKey.startsWith("entity;")) {
+                            rememberLoadedContainerSource(location, containerKey);
+                        }
+                        if (this.plugin.isAdvancedLoggingEnabled()) {
+                            this.plugin.logAdvanced(
                 "Created personal loot inventory: player=%s, source=%s, sourceKey=%s, location=%s, "
                     + "lootTable=%s, slots=%d, items=[%s]",
                 LogDescriptions.player(player),
@@ -524,8 +698,32 @@ public final class LootListener implements Listener {
                 size,
                 LogDescriptions.items(contents)
             );
-        }
-        return contents;
+                        }
+                        completion.accept(contents);
+                    }));
+            })
+        );
+    }
+
+    private void runOnMain(final Runnable task) {
+        if (this.plugin.isEnabled()) Bukkit.getScheduler().runTask(this.plugin, task);
+    }
+
+    private long beginContainerOpen(final Player player) {
+        long generation = ++this.nextContainerOpenGeneration;
+        this.containerOpenGenerations.put(player.getUniqueId(), generation);
+        return generation;
+    }
+
+    private boolean isCurrentContainerOpen(final Player player, final long generation) {
+        return player.isOnline()
+            && Long.valueOf(generation).equals(this.containerOpenGenerations.get(player.getUniqueId()));
+    }
+
+    private static boolean canStillOpen(final Player player, final Location source) {
+        World sourceWorld = source.getWorld();
+        return sourceWorld != null && player.getWorld().equals(sourceWorld)
+            && player.getLocation().distanceSquared(source) <= 64.0;
     }
 
     private static Component customName(final Block block) {
@@ -593,7 +791,7 @@ public final class LootListener implements Listener {
                 return true;
             }
             String containerKey = entityContainerKey(minecart.getUniqueId());
-            if (hasManagedLootMinecartTag(minecart) || this.storage.hasContainerData(containerKey)) {
+            if (hasManagedLootMinecartTag(minecart)) {
                 cleanupLostLootMinecart(minecart);
                 return true;
             }
@@ -610,8 +808,9 @@ public final class LootListener implements Listener {
             return true;
         }
 
+        String key = containerKey(blockHolder.getBlock().getLocation());
         if (hasManagedLootContainerTag(state)
-            || this.storage.hasContainerData(containerKey(blockHolder.getBlock().getLocation()))) {
+            || hasLoadedContainerSource(blockHolder.getBlock().getLocation(), key)) {
             cleanupLostLootContainer(blockHolder.getBlock());
             return true;
         }
@@ -781,8 +980,7 @@ public final class LootListener implements Listener {
             tagLootMinecart(minecart, lootTable);
             return true;
         }
-        return hasManagedLootMinecartTag(minecart)
-            || this.storage.hasContainerData(entityContainerKey(minecart.getUniqueId()));
+        return hasManagedLootMinecartTag(minecart);
     }
 
     void cleanupLostLootMinecart(final StorageMinecart minecart) {
@@ -791,7 +989,7 @@ public final class LootListener implements Listener {
             return;
         }
         String containerKey = entityContainerKey(minecart.getUniqueId());
-        if (!hasManagedLootMinecartTag(minecart) && !this.storage.hasContainerData(containerKey)) {
+        if (!hasManagedLootMinecartTag(minecart)) {
             return;
         }
         minecart.getPersistentDataContainer().remove(this.lootContainerTableKey);
@@ -814,7 +1012,8 @@ public final class LootListener implements Listener {
         }
 
         String containerKey = containerKey(block.getLocation());
-        if (!hasManagedLootContainerTag(state) && !this.storage.hasContainerData(containerKey)) {
+        if (!hasManagedLootContainerTag(state)
+            && !hasLoadedContainerSource(block.getLocation(), containerKey)) {
             return;
         }
 
@@ -825,7 +1024,7 @@ public final class LootListener implements Listener {
             tileState.getPersistentDataContainer().remove(this.lootContainerSeedKey);
             tileState.update(false, false);
         }
-        this.storage.removeContainerData(containerKey);
+        removeStoredContainerData(containerKey, block.getLocation());
         this.plugin.logAdvanced(
             "Loot container left personal management: block=%s, sourceKey=%s, location=%s; personal data removed",
             block.getType(),
@@ -837,9 +1036,10 @@ public final class LootListener implements Listener {
     private void cleanupDestroyedLootContainer(final Block block) {
         BlockState state = block.getState();
         String containerKey = containerKey(block.getLocation());
-        if (isManagedNaturalLootContainer(state) || this.storage.hasContainerData(containerKey)) {
+        if (isManagedNaturalLootContainer(state)
+            || hasLoadedContainerSource(block.getLocation(), containerKey)) {
             closeVirtualContainerViews(containerKey);
-            this.storage.removeContainerData(containerKey);
+            removeStoredContainerData(containerKey, block.getLocation());
             this.plugin.logAdvanced(
                 "Natural loot container removed by explosion: block=%s, sourceKey=%s, location=%s; personal data removed",
                 block.getType(),
@@ -857,7 +1057,7 @@ public final class LootListener implements Listener {
         blocks.removeIf(block -> {
             String key = containerKey(block.getLocation());
             boolean protectedContainer = isManagedNaturalLootContainer(block.getState())
-                || this.storage.hasContainerData(key);
+                || hasLoadedContainerSource(block.getLocation(), key);
             if (protectedContainer) {
                 this.plugin.logAdvanced(
                     "Protected natural loot container from explosion: block=%s, sourceKey=%s, location=%s",
@@ -892,6 +1092,54 @@ public final class LootListener implements Listener {
         World world = location.getWorld();
         String worldId = world == null ? "unknown" : world.getUID().toString();
         return worldId + ";" + location.getBlockX() + ";" + location.getBlockY() + ";" + location.getBlockZ();
+    }
+
+    private boolean hasLoadedContainerSource(final Location location, final String containerKey) {
+        World world = location.getWorld();
+        if (world == null) return false;
+        ChunkKey key = new ChunkKey(
+            world.getUID(),
+            Math.floorDiv(location.getBlockX(), 16),
+            Math.floorDiv(location.getBlockZ(), 16)
+        );
+        Set<String> sources = this.loadedContainerSources.get(key);
+        return sources != null && sources.contains(containerKey);
+    }
+
+    private void rememberLoadedContainerSource(final Location location, final String containerKey) {
+        World world = location.getWorld();
+        if (world == null) return;
+        ChunkKey key = new ChunkKey(
+            world.getUID(),
+            Math.floorDiv(location.getBlockX(), 16),
+            Math.floorDiv(location.getBlockZ(), 16)
+        );
+        if (!world.isChunkLoaded(key.chunkX(), key.chunkZ())) return;
+        this.loadedContainerSources.computeIfAbsent(key, ignored -> new HashSet<>()).add(containerKey);
+    }
+
+    private void removeStoredContainerData(final String containerKey, final Location location) {
+        this.storage.removeContainerDataAsync(List.of(containerKey)).whenComplete((ignored, failure) -> {
+            if (failure != null) {
+                this.plugin.getLogger().log(
+                    java.util.logging.Level.SEVERE,
+                    "Could not remove stored container data " + containerKey + ".",
+                    failure
+                );
+                return;
+            }
+            runOnMain(() -> {
+                World world = location.getWorld();
+                if (world == null) return;
+                ChunkKey key = new ChunkKey(
+                    world.getUID(),
+                    Math.floorDiv(location.getBlockX(), 16),
+                    Math.floorDiv(location.getBlockZ(), 16)
+                );
+                Set<String> sources = this.loadedContainerSources.get(key);
+                if (sources != null) sources.remove(containerKey);
+            });
+        });
     }
 
     static String entityContainerKey(final UUID entityId) {

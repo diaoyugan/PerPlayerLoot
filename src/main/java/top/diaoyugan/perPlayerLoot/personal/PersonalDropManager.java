@@ -96,7 +96,7 @@ public final class PersonalDropManager implements Listener {
 
         UUID sourceId = itemFrame.getUniqueId();
         UUID playerId = player.getUniqueId();
-        if (this.storage.hasClaimedFrame(sourceId, playerId) || hasActiveDrop(playerId, sourceId)) {
+        if (this.storage.hasClaimedFrame(itemFrame, playerId) || hasActiveDrop(playerId, sourceId)) {
             Messages.send(player, Messages.FRAME_ALREADY_CLAIMED);
             this.visibilityAdapter.sendEmptyItemFrameToOwner(itemFrame, player);
             this.plugin.logAdvanced(
@@ -115,11 +115,10 @@ public final class PersonalDropManager implements Listener {
 
         Location spawnLocation = dropLocation(itemFrame);
         PersonalDrop pendingDrop = pendingDrop(player, sourceId, loot, spawnLocation);
-        if (!this.storage.claimFrameWithDrop(sourceId, playerId, pendingDrop)) {
+        if (!this.storage.claimFrameWithDrop(itemFrame, playerId, pendingDrop)) {
             Messages.send(player, Messages.FRAME_ALREADY_CLAIMED);
             return false;
         }
-        this.visibilityAdapter.registerFrameClaim(sourceId, playerId);
         try {
             spawnAndLog(
                 player,
@@ -211,7 +210,7 @@ public final class PersonalDropManager implements Listener {
     public boolean hasClaimedOrActiveDrop(final Player player, final ItemFrame itemFrame) {
         UUID sourceId = itemFrame.getUniqueId();
         UUID playerId = player.getUniqueId();
-        return this.storage.hasClaimedFrame(sourceId, playerId) || hasActiveDrop(playerId, sourceId);
+        return this.storage.hasClaimedFrame(itemFrame, playerId) || hasActiveDrop(playerId, sourceId);
     }
 
     public void restoreOnlinePlayerDrops() {

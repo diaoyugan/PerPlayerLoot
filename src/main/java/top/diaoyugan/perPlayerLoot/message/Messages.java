@@ -28,6 +28,8 @@ public final class Messages {
     public static final String NO_FRAME_DESTROY_PERMISSION = "message.perplayerloot.no_frame_destroy_permission";
     public static final String BRUSHABLE_ALREADY_CLAIMED = "message.perplayerloot.brushable_already_claimed";
     public static final String NO_BRUSHABLE_DESTROY_PERMISSION = "message.perplayerloot.no_brushable_destroy_permission";
+    public static final String CLAIM_CHUNK_LOADING = "message.perplayerloot.claim_chunk_loading";
+    public static final String CLAIM_CHUNK_FAILED = "message.perplayerloot.claim_chunk_failed";
     public static final String RELOAD_SUCCESS = "message.perplayerloot.reload_success";
     public static final String RELOAD_USAGE = "message.perplayerloot.reload_usage";
 
@@ -61,6 +63,10 @@ public final class Messages {
 
     public static void send(final Player player, final String key) {
         player.sendMessage(Component.text(resolve(player, key)));
+    }
+
+    public static void sendActionBar(final Player player, final String key) {
+        player.sendActionBar(Component.text(resolve(player, key)));
     }
 
     public static void send(final CommandSender sender, final String key) {

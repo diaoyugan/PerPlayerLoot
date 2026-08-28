@@ -53,6 +53,7 @@ public final class BrushableLootListener implements Listener {
     private final PerPlayerLoot plugin;
     private final LootStorage storage;
     private final PersonalDropManager personalDropManager;
+    private final ClaimReadinessGuard claimReadiness;
     private final NamespacedKey lootTableKey;
     private final NamespacedKey lootSeedKey;
     private final Map<BrushSessionKey, BrushSession> sessions = new HashMap<>();
@@ -61,11 +62,13 @@ public final class BrushableLootListener implements Listener {
     public BrushableLootListener(
         final PerPlayerLoot plugin,
         final LootStorage storage,
-        final PersonalDropManager personalDropManager
+        final PersonalDropManager personalDropManager,
+        final ClaimReadinessGuard claimReadiness
     ) {
         this.plugin = plugin;
         this.storage = storage;
         this.personalDropManager = personalDropManager;
+        this.claimReadiness = claimReadiness;
         this.lootTableKey = new NamespacedKey(plugin, "brushable_loot_table");
         this.lootSeedKey = new NamespacedKey(plugin, "brushable_loot_seed");
     }
@@ -89,6 +92,16 @@ public final class BrushableLootListener implements Listener {
         Block block = event.getBlock();
         BlockState state = block.getState();
         if (!(state instanceof BrushableBlock brushable) || !isNaturalBrushable(state)) {
+            return;
+        }
+
+        if (event.getEntity() instanceof Player player) {
+            if (!this.claimReadiness.allow(player, block.getLocation())) {
+                event.setCancelled(true);
+                return;
+            }
+        } else if (!this.claimReadiness.isReady(block.getChunk())) {
+            event.setCancelled(true);
             return;
         }
 
@@ -177,6 +190,11 @@ public final class BrushableLootListener implements Listener {
     public void onBlockBreak(final BlockBreakEvent event) {
         Block block = event.getBlock();
         if (!isNaturalBrushable(block.getState())) {
+            return;
+        }
+
+        if (!this.claimReadiness.allow(event.getPlayer(), block.getLocation())) {
+            event.setCancelled(true);
             return;
         }
 
@@ -301,6 +319,9 @@ public final class BrushableLootListener implements Listener {
         blocks.removeIf(block -> {
             if (!isNaturalBrushable(block.getState())) {
                 return false;
+            }
+            if (!this.claimReadiness.isReady(block.getChunk())) {
+                return true;
             }
             if (!protect || allowDestroy) {
                 cleanup(block);
